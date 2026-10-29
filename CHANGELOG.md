@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 <!-- New features go here -->
-- Sync assigned Jira Cloud issues into project tasks with full descriptions and comments, secure credentials, duplicate protection, and optional automatic refresh.
+- Sync assigned Jira Cloud issues into project tasks and launch agents with refreshed descriptions, acceptance criteria, comments, and clarification guidance, alongside secure credentials, duplicate protection, and optional automatic refresh.
 
 ### Changed
 <!-- Changes to existing functionality go here -->

@@ -1,7 +1,26 @@
 // @vitest-environment node
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'events';
+import { ipcMain } from 'electron';
+
+const realHandler = vi.hoisted(() => ({ rows: [] as any[], activity: vi.fn(), pending: vi.fn() }));
+vi.mock('electron', async () => {
+  const { EventEmitter } = await import('node:events');
+  const { testApp } = await import('../../../../test-stubs/privateUserData');
+  return { app: { ...testApp, isReady: () => true, on: vi.fn(), once: vi.fn(), getVersion: () => '1.0.0', getName: () => 'test-app' }, ipcMain: new EventEmitter(), BrowserWindow: { getAllWindows: () => [] } };
+});
+vi.mock('@nimbalyst/runtime/storage/repositories/AgentMessagesRepository', () => ({ AgentMessagesRepository: {
+  listTail: async () => realHandler.rows,
+  create: async (row: unknown) => { realHandler.rows.push(row); },
+} }));
+vi.mock('@nimbalyst/runtime/storage/repositories/AISessionsRepository', () => ({ AISessionsRepository: { get: async () => ({ provider: 'openai-codex', title: 'Jira clarification' }) } }));
+vi.mock('@nimbalyst/runtime/ai/server/SessionStateManager', () => ({ getSessionStateManager: () => ({ updateActivity: async (...args: unknown[]) => realHandler.activity(...args), isSessionActive: () => true }) }));
+vi.mock('../../services/ai/pendingPromptPersistence', () => ({ setSessionPendingPrompt: async (...args: unknown[]) => realHandler.pending(...args) }));
+vi.mock('../../services/NotificationService', () => ({ notificationService: { showBlockedNotification: vi.fn() } }));
+vi.mock('../tools/interactivePromptTranscript', () => ({ isClaudeCliSession: async () => false }));
+vi.mock('../tools/codexToolCallResolver', () => ({ resolveRequestUserInputPromptTargets: (id: string) => ({ waiterPromptIds: [id] }), resolveToolUseIdFromMcpRequest: async () => 'call_jira_clarification' }));
+vi.mock('../mcpWorkspaceResolver', () => ({ findWindowIdForWorkspacePath: async () => undefined }));
 
 import {
   buildCodexToolLookupId,
@@ -13,13 +32,69 @@ import {
   notePendingInteractiveWaiter,
   shouldSettleFromSessionFallback,
 } from '../tools/interactivePromptFallback';
-import { getInteractiveToolSchemas } from '../tools/interactiveToolHandlers';
+import { getInteractiveToolSchemas, handleRequestUserInput } from '../tools/interactiveToolHandlers';
 
 const ipc = new EventEmitter();
 
 const SESSION_ID = 'test-session-aaaa-bbbb-cccc';
 const RAW_PROMPT_ID = 'call_prompt_123';
 const SYNTHETIC_PROMPT_ID = buildCodexToolLookupId(RAW_PROMPT_ID, 1234567890, 42);
+
+describe('production Jira clarification waiter', () => {
+  const sessionId = 'jira-launch-session';
+  const channel = `request-user-input-response:${sessionId}:call_jira_clarification`;
+  const fields = [{ id: 'environment', type: 'singleSelect', label: 'Target environment', options: [{ id: 'staging', label: 'Staging' }, { id: 'production', label: 'Production' }] }];
+  afterEach(() => { vi.useRealTimers(); realHandler.rows = []; vi.clearAllMocks(); });
+
+  it('blocks dependent work without an answer, then resumes with durable answers', async () => {
+    vi.useFakeTimers();
+    const dependentWork = vi.fn();
+    const call = handleRequestUserInput({ fields }, sessionId, undefined, {});
+    const continuation = call.then(result => { if (!result.isError) dependentWork(JSON.parse(result.content[0].text!)); });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(realHandler.activity).toHaveBeenCalledWith({ sessionId, status: 'waiting_for_input' });
+    expect(realHandler.pending).toHaveBeenCalledWith(sessionId, true, 'decision');
+    await vi.advanceTimersByTimeAsync(11 * 60_000);
+    expect(dependentWork).not.toHaveBeenCalled();
+    const answers = { environment: { type: 'singleSelect', selectedId: 'staging' } };
+    realHandler.rows.push({ createdAt: new Date(), content: JSON.stringify({ type: 'request_user_input_response', promptId: 'call_jira_clarification', answers, cancelled: false }) });
+    (ipcMain as unknown as EventEmitter).emit(channel, {}, { answers, cancelled: false });
+    await continuation;
+    expect(dependentWork).toHaveBeenCalledWith(expect.objectContaining({ answers }));
+    const result = realHandler.rows.map(row => JSON.parse(row.content)).find(row => row.type === 'nimbalyst_tool_result');
+    expect(JSON.parse(result.result)).toMatchObject({ answers, cancelled: false });
+    expect(realHandler.pending).toHaveBeenCalledWith(sessionId, false);
+  });
+
+  it.each(['cancelled', 'client-aborted'])('does not run dependent work when %s', async reason => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const dependentWork = vi.fn();
+    const call = handleRequestUserInput({ fields }, sessionId, undefined, {}, { signal: controller.signal, sendNotification: vi.fn() });
+    const continuation = call.then(result => { if (!result.isError) dependentWork(); return result; });
+    await vi.advanceTimersByTimeAsync(0);
+    if (reason === 'cancelled') (ipcMain as unknown as EventEmitter).emit(channel, {}, { cancelled: true });
+    else controller.abort();
+    const result = await continuation;
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(result.content[0].text!)).toMatchObject({ cancelled: true });
+    expect(dependentWork).not.toHaveBeenCalled();
+    expect((ipcMain as unknown as EventEmitter).listenerCount(channel)).toBe(0);
+    expect(realHandler.rows.filter(row => JSON.parse(row.content).type === 'nimbalyst_tool_result')).toHaveLength(reason === 'cancelled' ? 1 : 0);
+  });
+
+  it('recovers persisted answers through polling when IPC is missed', async () => {
+    vi.useFakeTimers();
+    const call = handleRequestUserInput({ fields }, sessionId, undefined, {});
+    await vi.advanceTimersByTimeAsync(0);
+    const answers = { environment: { type: 'singleSelect', selectedId: 'production' } };
+    realHandler.rows.push({ createdAt: new Date(), content: JSON.stringify({ type: 'request_user_input_response', promptId: 'call_jira_clarification', answers, cancelled: false }) });
+    await vi.advanceTimersByTimeAsync(1000);
+    const result = await call;
+    expect(result.isError).toBe(false);
+    expect(JSON.parse(result.content[0].text!)).toMatchObject({ answers });
+  });
+});
 
 function specificChannel(sessionId: string, promptId: string) {
   return `request-user-input-response:${sessionId}:${promptId}`;

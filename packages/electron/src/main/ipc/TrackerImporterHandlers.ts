@@ -13,6 +13,11 @@ import { logger } from '../utils/logger';
 import type { ImporterBinding, ImporterListFilter } from '@nimbalyst/extension-sdk';
 import { getTrackerImporterRegistry } from '../services/tracker/TrackerImporterRegistry';
 import { getTrackerImportService } from '../services/tracker/TrackerImportService';
+import { documentServices } from '../window/WindowManager';
+import { prepareJiraLaunch } from '../services/tracker/prepareJiraLaunch';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
 
 function requireWorkspace(workspacePath: string | undefined): string {
   if (!workspacePath) {
@@ -23,6 +28,24 @@ function requireWorkspace(workspacePath: string | undefined): string {
 
 export function registerTrackerImporterHandlers(): void {
   const registry = getTrackerImporterRegistry();
+
+  safeHandle('tracker:prepare-jira-launch', async (_event, args: { workspacePath: string; itemId: string }) => {
+    const workspace = requireWorkspace(args.workspacePath);
+    const service = documentServices.get(workspace);
+    if (!service) throw new Error('The project is no longer open. Start the launch again.');
+    return prepareJiraLaunch(workspace, args.itemId, {
+      getItem: id => service.getTrackerItemById(id),
+      getContent: id => service.getTrackerItemContent(id),
+      fetchSnapshot: (path, provider, id) => registry.fetchSnapshot(path, provider, id),
+      saveContinuation: async content => {
+        const directory = join(workspace, 'nimbalyst-local', 'jira-launch');
+        await mkdir(directory, { recursive: true, mode: 0o700 });
+        const filePath = join(directory, `${randomUUID()}.md`);
+        await writeFile(filePath, content, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+        return filePath;
+      },
+    });
+  });
 
   safeHandle('tracker:importer:list', async (_event, workspacePath?: string) => {
     return registry.listImporters(requireWorkspace(workspacePath));

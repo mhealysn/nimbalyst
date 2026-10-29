@@ -41,3 +41,11 @@ it('does not start sync when credentials cannot be saved', async () => {
   await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Secure credential storage is unavailable.'));
   expect(invoke.mock.calls.some(call => call[0] === 'jira:sync')).toBe(false);
 });
+
+it('saves acceptance criteria mappings for the project', async () => {
+  render(<JiraPanel workspacePath="/project" />);
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled());
+  fireEvent.change(screen.getByLabelText('Acceptance criteria field IDs (optional)'), { target: { value: 'customfield_42, customfield_71' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith('jira:save-settings', expect.objectContaining({ workspacePath: '/project', settings: expect.objectContaining({ acceptanceCriteriaFieldIds: ['customfield_42', 'customfield_71'] }) })));
+});

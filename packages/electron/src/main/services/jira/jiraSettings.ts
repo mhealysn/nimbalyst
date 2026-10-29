@@ -37,6 +37,7 @@ export function jiraProjectSettings(workspacePath: string): JiraProjectSettings 
 export function saveJiraProjectSettings(workspacePath: string, settings: JiraProjectSettings): void {
   if (!settings.jql?.trim()) throw new Error('JQL is required.');
   if (!Number.isInteger(settings.autoSyncMinutes) || settings.autoSyncMinutes < 0 || settings.autoSyncMinutes > 10080) throw new Error('Auto-sync minutes must be a whole number from 0 to 10080.');
+  if (settings.acceptanceCriteriaFieldIds !== undefined && (!Array.isArray(settings.acceptanceCriteriaFieldIds) || settings.acceptanceCriteriaFieldIds.some(id => typeof id !== 'string' || !/^customfield_\d+$/.test(id)))) throw new Error('Acceptance criteria field IDs must be Jira custom field IDs such as customfield_12345.');
   // Explicit allowlist: credentials can never enter the plain settings store.
-  setAppSetting(SETTINGS_KEY, { ...jiraProjects(), [workspacePath]: { jql: settings.jql.trim(), autoSyncMinutes: settings.autoSyncMinutes } });
+  setAppSetting(SETTINGS_KEY, { ...jiraProjects(), [workspacePath]: { jql: settings.jql.trim(), autoSyncMinutes: settings.autoSyncMinutes, ...(settings.acceptanceCriteriaFieldIds?.length ? { acceptanceCriteriaFieldIds: [...new Set(settings.acceptanceCriteriaFieldIds)] } : {}) } });
 }

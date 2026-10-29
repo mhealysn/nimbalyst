@@ -62,6 +62,57 @@ describe('Jira Cloud', () => {
     await expect(async () => { for await (const _issue of client.search('mine')) { /* consume */ } }).rejects.toThrow('repeated search page');
     expect(fetcher.mock.calls[0][1]).toMatchObject({ redirect: 'error', headers: { Authorization: `Basic ${btoa('me:secret')}` } });
     fetcher.mockImplementation(async () => response({ comments: [], total: 1 }));
-    await expect(client.snapshot({ key: 'APP-1', fields: { summary: 'First' } })).rejects.toThrow('all comments');
+    const partial = await client.snapshot({ key: 'APP-1', fields: { summary: 'First' } });
+    expect(partial.body).toContain('Partial/unavailable comments');
+    expect(partial.body).toContain('startAt=0');
+  });
+
+  it.each(['customfield_10017', 'customfield_29999'])('discovers acceptance criteria from site field %s and keeps embedded criteria', async fieldId => {
+    const fetcher = vi.fn().mockResolvedValueOnce(response({ key: 'APP-1', names: { [fieldId]: 'Acceptance Criteria' }, fields: { summary: 'First', description: doc('Acceptance criteria: preserve links'), [fieldId]: doc('All checks pass') } }))
+      .mockResolvedValueOnce(response({ comments: [], total: 0 }));
+    const snapshot = await new JiraClient({ siteUrl: 'https://team.atlassian.net', email: 'me', apiToken: 'secret' }, fetcher).fetchSnapshot('APP-1');
+    expect(fetcher.mock.calls[0][0]).toContain('fields=*all&expand=names');
+    expect(snapshot.body).toContain('Acceptance criteria: preserve links');
+    expect(snapshot.body).toContain(`Acceptance Criteria (${fieldId})`);
+    expect(snapshot.body).toContain('All checks pass');
+    expect(snapshot.body).toContain('Absent: no comments');
+  });
+
+  it('distinguishes absent fields, omitted fields, inaccessible comments, and failed pages', async () => {
+    const fetcher = vi.fn().mockResolvedValue(response({}, 403));
+    const client = new JiraClient({ siteUrl: 'https://team.atlassian.net', email: 'me', apiToken: 'secret' }, fetcher);
+    const snapshot = await client.snapshot({ key: 'APP-1', names: { customfield_7: 'Acceptance Criteria' }, fields: { summary: 'First', description: null } });
+    expect(snapshot.body).toContain('Absent: Jira returned an empty field');
+    expect(snapshot.body).toContain('Unavailable: field omitted by Jira');
+    expect(snapshot.body).toContain('inaccessible');
+    fetcher.mockResolvedValueOnce(response({ comments: [{ id: 'c1', author: { displayName: 'Alice' }, created: '2026-10-29T12:00:00Z', body: doc('Retained comment') }], total: 3 })).mockResolvedValueOnce(response({}, 503));
+    const partial = await client.snapshot({ key: 'APP-1', fields: { summary: 'First', description: doc('Details') } });
+    expect(partial.body).toContain('Alice — 2026-10-29T12:00:00Z');
+    expect(partial.body).toContain('Retained comment');
+    expect(partial.body).toContain('request failed');
+    expect(partial.body).toContain('retained 1 accessible comments');
+    expect(partial.body).toContain('startAt=1');
+  });
+
+  it('stops repeated comment pages and keeps unique accessible comments', async () => {
+    const fetcher = vi.fn().mockResolvedValue(response({ comments: [{ id: 'c1', created: '2026-10-29', body: doc('Only once') }], total: 5 }));
+    const snapshot = await new JiraClient({ siteUrl: 'https://team.atlassian.net', email: 'me', apiToken: 'secret' }, fetcher).snapshot({ key: 'APP-1', fields: { summary: 'First' } });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(snapshot.body?.match(/Only once/g)).toHaveLength(1);
+    expect(snapshot.body).toContain('Partial/unavailable');
+  });
+
+  it('uses configured fields without discovery metadata', async () => {
+    const client = new JiraClient({ siteUrl: 'https://team.atlassian.net', email: 'me', apiToken: 'secret' }, vi.fn().mockResolvedValue(response({ comments: [], total: 0 })), ['customfield_42']);
+    const snapshot = await client.snapshot({ key: 'APP-1', fields: { summary: 'First', description: null, customfield_42: doc('Custom completion criteria') } });
+    expect(snapshot.body).toContain('Configured acceptance criteria (customfield_42)');
+    expect(snapshot.body).toContain('Custom completion criteria');
+  });
+
+  it('preserves search-level custom-field discovery metadata', async () => {
+    const client = new JiraClient({ siteUrl: 'https://team.atlassian.net', email: 'me', apiToken: 'secret' }, vi.fn().mockResolvedValue(response({ names: { customfield_8: 'Acceptance Criteria' }, issues: [{ key: 'APP-1', fields: { summary: 'First', customfield_8: doc('Required') } }], isLast: true })));
+    const issues = [];
+    for await (const issue of client.search('mine')) issues.push(issue);
+    expect(issues[0].names).toEqual({ customfield_8: 'Acceptance Criteria' });
   });
 });

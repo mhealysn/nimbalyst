@@ -38,16 +38,16 @@ export async function jiraTaskHasActiveSession(workspacePath: string, id: string
 }
 
 export function registerJiraHandlers(): void {
-  const client = () => {
+  const client = (workspacePath?: string) => {
     const credentials = readJiraCredentials();
     if (!credentials) throw new Error('Configure Jira in Settings → Project → Jira before syncing.');
-    return new JiraClient(credentials);
+    return new JiraClient(credentials, undefined, workspacePath ? jiraProjectSettings(workspacePath).acceptanceCriteriaFieldIds : undefined);
   };
   getTrackerImporterRegistry().registerBuiltin({ id: 'jira', displayName: 'Jira', icon: 'sync', urnScheme: 'jira', backendModuleId: 'host-jira', importsAs: ['task'] }, workspacePath => ({
     isAuthenticated: async () => { await client().request('/rest/api/3/myself'); return true; },
     listBindings: async () => [{ id: client().siteUrl, label: client().siteUrl }],
     list: async ({ filters }) => {
-      const jira = client();
+      const jira = client(workspacePath);
       const page = await jira.request<{ issues: JiraIssue[]; nextPageToken?: string }>('/rest/api/3/search/jql', {
         jql: jiraProjectSettings(workspacePath).jql, maxResults: 100, fields: ['summary'], ...(filters.cursor ? { nextPageToken: filters.cursor } : {}),
       });
@@ -55,8 +55,8 @@ export function registerJiraHandlers(): void {
     },
     fetch: async ({ externalId }) => {
       if (!/^[A-Z][A-Z0-9_]*-\d+$/i.test(externalId)) throw new Error('Invalid Jira issue key.');
-      const jira = client();
-      return jira.snapshot(await jira.request<JiraIssue>(`/rest/api/3/issue/${encodeURIComponent(externalId)}?fields=summary,description`));
+      const jira = client(workspacePath);
+      return jira.fetchSnapshot(externalId);
     },
   }));
   const service = new JiraSyncService();
@@ -67,7 +67,7 @@ export function registerJiraHandlers(): void {
     lastRun.set(workspacePath, Date.now());
     const credentials = readJiraCredentials();
     if (!credentials) throw new Error('Configure Jira in Settings → Project → Jira before syncing.');
-    const result = await service.sync(workspacePath, jiraProjectSettings(workspacePath).jql, new JiraClient(credentials), snapshot =>
+    const result = await service.sync(workspacePath, jiraProjectSettings(workspacePath).jql, client(workspacePath), snapshot =>
       getTrackerImportService().importSnapshot({ workspacePath, providerId: 'jira', externalId: snapshot.external.externalId }, snapshot, { shouldSkip: id => jiraTaskHasActiveSession(workspacePath, id) }));
     results.set(workspacePath, result);
     return result;

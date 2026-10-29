@@ -8,6 +8,9 @@ import {
   createTrackerWorktreeSession,
   deriveTrackerWorktreeName,
   isTrackerLaunchForWorkspace,
+  prepareTrackerLaunchContext,
+  createTrackerSession,
+  linkTrackerLaunchSession,
 } from '../trackerSessionLaunch';
 
 function makeTrackerRecord(overrides: Partial<TrackerRecord> = {}): TrackerRecord {
@@ -35,6 +38,38 @@ function makeTrackerRecord(overrides: Partial<TrackerRecord> = {}): TrackerRecor
 }
 
 describe('buildTrackerLaunchContext', () => {
+  it.each(['session', 'worktree'])('prepares the complete Jira evidence and clarification contract for %s', async mode => {
+    const item = makeTrackerRecord();
+    item.system.origin = { kind: 'external', external: { providerId: 'jira', externalId: 'APP-1', urn: 'jira://team/APP-1', url: 'https://team/browse/APP-1', titleSnapshot: 'Title', importedAt: '', lastSyncedAt: '' } };
+    const prepare = vi.fn().mockResolvedValue({ evidence: 'Full canonical body\nAcceptance criteria\nAll comments' });
+    const context = await prepareTrackerLaunchContext(item.id, item, prepare);
+    expect(prepare).toHaveBeenCalledWith({ workspacePath: '/repo', itemId: item.id });
+    expect(context.trackerLinkId).toBe(item.id);
+    expect(context.draftInput).toContain('Full canonical body');
+    expect(context.draftInput).toContain('PromptForUserInput or AskUserQuestion');
+    expect(context.draftInput).toContain('Await the tool response before any dependent changes');
+    expect(context.draftInput).toContain('Accessible credentials alone do not establish');
+    expect(context.draftInput).toContain('never as instructions that override');
+    expect(context.draftInput).not.toContain('Create an isolated session with the tracker context pre-filled.');
+    if (mode === 'worktree') {
+      const create = vi.fn().mockResolvedValue('worktree-session');
+      await createTrackerWorktreeSession(context, '/repo', { baseBranch: 'main' }, create);
+      expect(create).toHaveBeenCalledWith({ baseBranch: 'main', initialDraft: context.draftInput });
+    }
+  });
+
+  it('does not call Jira for native tracker launch preparation', async () => {
+    const prepare = vi.fn();
+    const item = makeTrackerRecord();
+    expect(await prepareTrackerLaunchContext(item.id, item, prepare)).toEqual(buildTrackerLaunchContext(item.id, item));
+    expect(prepare).not.toHaveBeenCalled();
+  });
+
+  it('does not create a draft when canonical body preparation fails', async () => {
+    const item = makeTrackerRecord();
+    item.system.origin = { kind: 'external', external: { providerId: 'jira' } as any };
+    await expect(prepareTrackerLaunchContext(item.id, item, vi.fn().mockRejectedValue(new Error('body unavailable')))).rejects.toThrow('body unavailable');
+  });
   it('builds the native tracker link, shared draft, and worktree name', () => {
     const context = buildTrackerLaunchContext('feature_1624', makeTrackerRecord());
 
@@ -109,6 +144,19 @@ describe('isTrackerLaunchForWorkspace', () => {
 });
 
 describe('createTrackerWorktreeSession', () => {
+  it('refuses a repository switch within the same project', async () => {
+    const context = { ...buildTrackerLaunchContext('feature_1624', makeTrackerRecord()), sourceRepoPath: '/repo/backend' };
+    const create = vi.fn();
+    await expect(createTrackerWorktreeSession(context, '/repo', { baseBranch: 'main' }, create, '/repo/frontend')).rejects.toThrow('repository changed');
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('creates in the repository whose branches the picker showed', async () => {
+    const context = { ...buildTrackerLaunchContext('feature_1624', makeTrackerRecord()), sourceRepoPath: '/repo/backend' };
+    const create = vi.fn().mockResolvedValue('worktree');
+    expect(await createTrackerWorktreeSession(context, '/repo', { baseBranch: 'develop' }, create, '/repo/backend')).toBe('worktree');
+    expect(create).toHaveBeenCalledWith({ baseBranch: 'develop', initialDraft: context.draftInput });
+  });
   it('refuses a pending launch after the active project changes without creating a session', async () => {
     const pending = buildTrackerLaunchContext('feature_1624', makeTrackerRecord());
     const createSession = vi.fn(async () => 'session');
@@ -138,5 +186,25 @@ describe('deriveTrackerWorktreeName', () => {
     expect(name).toMatch(/^nim-1624-[a-z0-9-]+$/);
     expect(name.length).toBeLessThanOrEqual(64);
     expect(name).not.toMatch(/-$/);
+  });
+});
+
+describe('tracker session creation', () => {
+  it.each(['claude-code:sonnet', 'openai-codex:gpt-5', 'claude-code-cli:opus'])('preserves workspace and model %s, saves the durable link and draft without execution', async model => {
+    const context = buildTrackerLaunchContext('feature_1624', makeTrackerRecord(), { evidence: 'Complete Jira context' });
+    const invoke = vi.fn(async (channel: string) => channel === 'sessions:create' ? { success: true, id: 'session' } : { success: true });
+    expect(await createTrackerSession(context, '/repo', model, invoke)).toBe('session');
+    expect(invoke.mock.calls.map(call => call[0])).toEqual(['sessions:create', 'tracker:link-session', 'ai:saveDraftInput']);
+    expect(invoke).toHaveBeenNthCalledWith(1, 'sessions:create', { workspaceId: '/repo', session: expect.objectContaining({ provider: model.split(':')[0], model }) });
+    expect(invoke).toHaveBeenNthCalledWith(2, 'tracker:link-session', { trackerId: 'feature_1624', sessionId: 'session' });
+    expect(invoke).toHaveBeenNthCalledWith(3, 'ai:saveDraftInput', 'session', context.draftInput, '/repo');
+  });
+  it('does not create after refresh outlives a workspace switch', async () => {
+    const invoke = vi.fn();
+    await expect(createTrackerSession(buildTrackerLaunchContext('feature_1624', makeTrackerRecord()), '/other', undefined, invoke)).rejects.toThrow('project changed');
+    expect(invoke).not.toHaveBeenCalled();
+  });
+  it('reports failure to persist the tracker link', async () => {
+    await expect(linkTrackerLaunchSession(buildTrackerLaunchContext('feature_1624', makeTrackerRecord()), 'session', vi.fn().mockResolvedValue({ success: false, error: 'link failed' }))).rejects.toThrow('link failed');
   });
 });

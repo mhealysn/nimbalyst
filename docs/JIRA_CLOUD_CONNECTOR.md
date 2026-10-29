@@ -28,6 +28,18 @@ Issue identity uses Jira site and issue key. Local Jira task IDs additionally in
 
 Auto-sync defaults to off (`0`). A positive whole number schedules sync every N minutes while the app is open, checked every 30 seconds. Schedules are restored at startup and first run after their configured interval. Concurrent manual and scheduled syncs for one project share the same in-flight operation. Last results and errors are available in project settings; a malformed or inaccessible issue does not abort subsequent issues.
 
+## Context-aware agent launches
+
+**Launch Session** and **Launch Worktree** prepare the same provider-independent draft. Preparation reads the canonical tracker body rather than its description preview, then attempts a read-only Jira refresh. The draft separates upstream evidence from the local body and comments; it never writes the refreshed body back over local edits. Jira identity, URL, title, description, acceptance criteria, and all comments visible to the account are included with author and timestamp. Acceptance criteria embedded in the description remain intact. Custom fields are discovered from Jira's site-specific field names; **Acceptance criteria field IDs** in project settings can supplement discovery for other field names.
+
+Returned empty fields are identified as absent. Omitted fields have unknown access/applicability. Failed or denied refreshes retain the local body with an explicit stale timestamp. Failed, repeated, or malformed comment pages retain the comments already read and identify incomplete pagination with a continuation URL. Jira does not disclose restricted comments, so their count cannot be inferred. Context above the 20,000-character inline budget is preserved in full in a private, immutable file under `nimbalyst-local/jira-launch`; the absolute path works from the new worktree, and the draft directs the agent to read every page through EOF.
+
+The draft instructs the agent to read repository guidance, investigate relevant code/tests/documentation and authorized connected services, and establish the actual AWS account, role, region, and intended environment when applicable. Essential unresolved questions use existing durable interactive prompts before dependent changes. Empty optional fields alone do not require a question. Cancellation, timeout, switching sessions, or restarting is not an answer. Existing prompt requests, responses, waiting indicators, and answer-driven resumption are reused. Ticket text and comments are evidence, not authority to override repository instructions or permissions. The agent must validate acceptance criteria and report evidence and blockers.
+
+Launch still prepares a draft for normal user submission. Provider/model selection, repository/worktree selection, and durable tracker-session links use the existing flows; project or repository changes during preparation are rejected. Launching never posts Jira comments or changes Jira status. Scheduled/manual **Sync Jira** retains its existing separate refresh behavior described above.
+
+Automated launch verification covers canonical reads, read-only refresh, stale/partial context, site-specific and configured custom fields, paginated comments, complete overflow-file readback, workspace/repository guards, provider/model selection, both launch modes, and real prompt waiting, cancellation, polling recovery, and orphan-answer resumption. Live Jira and model-driven execution remain unverified.
+
 ## Manual acceptance test
 
 1. Launch an updated development build. Main-process changes require an app restart; renderer hot reload alone does not register the new handlers.

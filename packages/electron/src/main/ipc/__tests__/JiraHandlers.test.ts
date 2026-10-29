@@ -22,7 +22,7 @@ describe('Jira IPC and scheduling', () => {
     h.sync.mockResolvedValue({ created: 1, refreshed: 0, skipped: 0, errors: [] });
     h.state.mockReturnValue(null);
   });
-  afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); });
+  afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); });
   const invoke = (key: string, ...args: unknown[]) => h.handlers.get(key)!(null, ...args);
 
   it('registers the connector and returns token presence without exposing the token', () => {
@@ -31,6 +31,16 @@ describe('Jira IPC and scheduling', () => {
     expect(invoke('jira:get-settings', '/project')).toMatchObject({ email: 'me@example.com', hasToken: true });
     expect(JSON.stringify(invoke('jira:get-settings', '/project'))).not.toContain('private-token');
     expect(() => invoke('jira:get-settings', '')).toThrow('workspacePath');
+  });
+  it('uses project field mapping for launch refreshes and performs read-only requests', async () => {
+    h.projects['/project'] = { jql: 'mine', autoSyncMinutes: 0, acceptanceCriteriaFieldIds: ['customfield_42'] } as any;
+    const fetcher = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ key: 'APP-1', fields: { summary: 'Ticket', customfield_42: 'Required behavior' } })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ comments: [], total: 0 })));
+    vi.stubGlobal('fetch', fetcher);
+    registerJiraHandlers();
+    const snapshot = await h.register.mock.calls[0][1]('/project').fetch({ externalId: 'APP-1' });
+    expect(snapshot.body).toContain('Required behavior');
+    expect(fetcher.mock.calls.map(call => call[1].method)).toEqual(['GET', 'GET']);
   });
 
   it('preserves a saved token and requires a new token when changing accounts', () => {

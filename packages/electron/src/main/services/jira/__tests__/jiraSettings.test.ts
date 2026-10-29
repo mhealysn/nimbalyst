@@ -37,4 +37,9 @@ describe('Jira settings custody', () => {
     for (const minutes of [-1, 0.5, NaN, 10081]) expect(() => saveJiraProjectSettings('/project', { jql: 'mine', autoSyncMinutes: minutes })).toThrow('whole number');
     expect(h.set).not.toHaveBeenCalled();
   });
+  it('stores deduplicated project field mappings and rejects invalid field IDs', () => {
+    saveJiraProjectSettings('/project', { jql: 'mine', autoSyncMinutes: 0, acceptanceCriteriaFieldIds: ['customfield_7', 'customfield_7', 'customfield_9'] });
+    expect(h.set).toHaveBeenCalledWith('jiraProjects', { '/project': { jql: 'mine', autoSyncMinutes: 0, acceptanceCriteriaFieldIds: ['customfield_7', 'customfield_9'] } });
+    expect(() => saveJiraProjectSettings('/project', { jql: 'mine', autoSyncMinutes: 0, acceptanceCriteriaFieldIds: ['unsafe/path'] })).toThrow('field IDs');
+  });
 });

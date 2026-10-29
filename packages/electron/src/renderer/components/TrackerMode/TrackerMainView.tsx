@@ -86,7 +86,6 @@ import type { TrackerLinkedSessionOption } from '@nimbalyst/runtime/plugins/Trac
 import { workstreamStateAtom } from '../../store/atoms/workstreamState';
 import { setWindowModeAtom } from '../../store/atoms/windowMode';
 import { defaultAgentModelAtom, worktreesFeatureAvailableAtom } from '../../store/atoms/appSettings';
-import { ModelIdentifier } from '@nimbalyst/runtime/ai/server/types';
 import { store } from '../../store';
 import { createTrackerItem, isLocalWikiRecord } from '../../services/localWikiTrackerRecords';
 import { deleteLocalWikiItem, refuseLocalWikiArchive } from '../../services/localWikiTrackerWrites';
@@ -110,7 +109,9 @@ import { activeWorkspacePathAtom } from '../../store/atoms/openProjects';
 import { WorktreeBaseBranchPicker } from '../AgenticCoding/WorktreeBaseBranchPicker';
 import {
   assertTrackerItemInWorkspace,
-  buildTrackerLaunchContext,
+  prepareTrackerLaunchContext,
+  createTrackerSession,
+  linkTrackerLaunchSession,
   createTrackerWorktreeSession,
   isTrackerLaunchForWorkspace,
   type TrackerLaunchContext,
@@ -456,51 +457,25 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
       return;
     }
     try {
-      const trackerContext = buildTrackerLaunchContext(trackerItemId, trackerItem);
-
-      // Derive provider from the user's default model rather than hardcoding
-      // 'claude-code'. Mirrors AgentMode.createNewSession so a Codex-only
-      // workspace launches a Codex session, not a failed claude-code one.
-      // See nimbalyst#176.
-      const sessionId = crypto.randomUUID();
-      const parsedModel = defaultModel ? ModelIdentifier.tryParse(defaultModel) : null;
-      const provider = parsedModel?.provider || 'claude-code';
-      const result = await window.electronAPI.invoke('sessions:create', {
-        session: {
-          id: sessionId,
-          provider,
-          model: defaultModel,
-          title: 'New Session',
-        },
-        workspaceId: workspacePath,
+      const trackerContext = await prepareTrackerLaunchContext(trackerItemId, trackerItem,
+        args => window.electronAPI.invoke('tracker:prepare-jira-launch', args));
+      if (!isTrackerLaunchForWorkspace(trackerContext, store.get(activeWorkspacePathAtom))) return;
+      const sessionId = await createTrackerSession(trackerContext, store.get(activeWorkspacePathAtom), defaultModel,
+        (channel, ...args) => window.electronAPI.invoke(channel, ...args));
+      await refreshSessionList();
+      setSelectedWorkstream({
+        workspacePath: workspacePath || '',
+        selection: { type: 'session', id: sessionId },
       });
-      if (result?.success && result?.id) {
-        await window.electronAPI.invoke('tracker:link-session', {
-          trackerId: trackerContext.trackerLinkId,
-          sessionId: result.id,
-        });
-        await window.electronAPI.invoke(
-          'ai:saveDraftInput',
-          result.id,
-          trackerContext.draftInput,
-          workspacePath,
-        );
-
-        // Refresh session list to pick up the new session, then navigate
-        await refreshSessionList();
-        setSelectedWorkstream({
-          workspacePath: workspacePath || '',
-          selection: { type: 'session', id: result.id },
-        });
-        setWindowMode('agent');
-      }
+      setWindowMode('agent');
     } catch (err) {
       console.error('[TrackerMainView] Failed to launch session:', err);
+      errorNotificationService.showError('Session not started', (err as Error).message);
     }
   }, [workspacePath, refreshSessionList, setSelectedWorkstream, setWindowMode, defaultModel]);
 
   /** Launch a new isolated worktree session linked to a tracker item. */
-  const handleLaunchWorktree = useCallback((trackerItemId: string) => {
+  const handleLaunchWorktree = useCallback(async (trackerItemId: string) => {
     const trackerItem = store.get(trackerItemsMapAtom).get(trackerItemId);
     try {
       assertTrackerItemInWorkspace(trackerItem, workspacePath);
@@ -508,8 +483,18 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
       errorNotificationService.showError('Session not started', (err as Error).message);
       return;
     }
-    setPendingWorktreeLaunch(buildTrackerLaunchContext(trackerItemId, trackerItem));
-  }, [workspacePath]);
+    try {
+      const context = await prepareTrackerLaunchContext(trackerItemId, trackerItem,
+        args => window.electronAPI.invoke('tracker:prepare-jira-launch', args));
+      if (isTrackerLaunchForWorkspace(context, store.get(activeWorkspacePathAtom))) {
+        const currentRepo = store.get(activeFileRepoPathAtom) ?? store.get(activeWorkspacePathAtom);
+        if (currentRepo !== worktreeSourceRepoPath) throw new Error('The selected repository changed. Start the worktree launch again.');
+        setPendingWorktreeLaunch({ ...context, sourceRepoPath: worktreeSourceRepoPath });
+      }
+    } catch (err) {
+      errorNotificationService.showError('Worktree not started', (err as Error).message);
+    }
+  }, [workspacePath, worktreeSourceRepoPath]);
 
   const handleCreateTrackerWorktree = useCallback(async (
     options: { baseBranch: string; name?: string },
@@ -522,13 +507,12 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
         store.get(activeWorkspacePathAtom),
         options,
         createNewWorktreeSession,
+        store.get(activeFileRepoPathAtom) ?? store.get(activeWorkspacePathAtom),
       );
       if (!sessionId) throw new Error('Worktree session was not created');
 
-      await window.electronAPI.invoke('tracker:link-session', {
-        trackerId: pendingWorktreeLaunch.trackerLinkId,
-        sessionId,
-      });
+      await linkTrackerLaunchSession(pendingWorktreeLaunch, sessionId,
+        (channel, ...args) => window.electronAPI.invoke(channel, ...args));
       await refreshSessionList();
       handleSwitchToAgentMode(sessionId);
       setPendingWorktreeLaunch(null);
@@ -1432,7 +1416,7 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
       {workspacePath && pendingWorktreeLaunch && pendingLaunchIsCurrent && (
         <WorktreeBaseBranchPicker
           isOpen
-          repoPath={worktreeSourceRepoPath}
+          repoPath={pendingWorktreeLaunch.sourceRepoPath ?? worktreeSourceRepoPath}
           initialName={pendingWorktreeLaunch.worktreeName}
           onCreate={handleCreateTrackerWorktree}
           onCancel={() => setPendingWorktreeLaunch(null)}
