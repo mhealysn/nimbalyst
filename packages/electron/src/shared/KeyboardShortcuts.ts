@@ -4,6 +4,10 @@
  */
 
 export const KeyboardShortcuts = {
+  voice: {
+    // Ctrl+Shift+V is Paste as Text on Windows/Linux; keep that binding free.
+    toggle: process.platform === 'darwin' ? 'Ctrl+Shift+V' : 'Ctrl+Alt+Shift+V',
+  },
   // File Menu
   file: {
     newFile: 'Cmd+N',
@@ -52,6 +56,8 @@ export const KeyboardShortcuts = {
     toggleTerminalPanel: 'Ctrl+`',
     toggleCliTerminalDrawer: 'Ctrl+Shift+`',
     trackerMode: 'Cmd+T',
+    trackerPlanner: 'Cmd+Alt+P',
+    agendaMode: 'Cmd+Alt+A',
     collabMode: 'Cmd+D',
     // The project's organization: inbox, rooms and direct messages. Every plain
     // Cmd+letter is already spoken for, and this keeps the organization family

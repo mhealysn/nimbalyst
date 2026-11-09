@@ -72,6 +72,19 @@ it('merges overlapping metadata updates without losing either key', async () => 
   expect(metadata.activity).toHaveLength(1);
 });
 
+it('projects board placement and distinguishes a started session without counting its transcript', async () => {
+  const store = createPGLiteSessionStore(sqlite);
+  await store.create({ id: 'unstarted', provider: 'openai-codex', workspaceId: '/board' });
+  await store.create({ id: 'started', provider: 'claude-code', workspaceId: '/board', providerSessionId: 'thread-1' });
+  const kanbanOverride = { column: 'validating' as const, status: '[["started","validating"]]' };
+  await store.updateMetadata('started', { metadata: { kanbanOverride } });
+  const sessions = projectSessionList(await store.list('/board'), new Map());
+  expect(sessions.find(s => s.id === 'unstarted')).toMatchObject({ hasStarted: false });
+  const projected = sessions.find(s => s.id === 'started')!;
+  expect(projected).toMatchObject({ hasStarted: true, kanbanOverride });
+  expect(sessionListMetadata(projected, '/board')).toMatchObject({ hasStarted: true, kanbanOverride });
+});
+
 it('archives every descendant and lifts children transactionally when deleting an interior session', async () => {
   const store = createPGLiteSessionStore(sqlite);
   await store.create({ id: 'root', provider: 'claude-code', workspaceId: '/p' });
@@ -328,4 +341,28 @@ it('lists and searches sessions from projected metadata, never the whole blob', 
   const withMetadata = returnedRows.filter(row => row.metadata != null);
   expect(withMetadata.length).toBeGreaterThan(0);
   expect(withMetadata.some(row => JSON.stringify(row.metadata).includes('currentTasks'))).toBe(false);
+});
+
+
+it('carries lifetime usage and transcript times through the board registry without counting metadata edits', async () => {
+  const store = createPGLiteSessionStore(sqlite);
+  await store.create({ id: 'metrics', provider: 'claude-code', workspaceId: '/metrics' });
+  await store.create({ id: 'empty', provider: 'claude-code', workspaceId: '/metrics' });
+  await store.updateMetadata('metrics', { metadata: { tokenUsage: {
+    inputTokens: 100, outputTokens: 20, totalTokens: 120,
+    cacheReadInputTokens: 500, cacheCreationInputTokens: 50, costUSD: 0.25,
+    currentContext: { tokens: 5, contextWindow: 100 },
+  } } });
+  for (const [direction, time] of [['input', '2026-10-01T12:00:00Z'], ['output', '2026-10-01T12:02:30Z']]) {
+    await sqlite.query(`INSERT INTO ai_agent_messages (session_id, source, direction, content, created_at)
+      VALUES ('metrics', 'claude-code', $1, '{}', $2)`, [direction, time]);
+  }
+  await store.updateMetadata('metrics', { title: 'Renamed after completion', isArchived: true });
+  const entries = projectSessionList(await store.list('/metrics', { includeArchived: true }), new Map());
+  const metrics = sessionListMetadata(entries.find(s => s.id === 'metrics')!, '/metrics');
+  expect(metrics.completionMetrics).toEqual({
+    totalTokens: 670, costUSD: 0.25,
+    startedAt: Date.parse('2026-10-01T12:00:00Z'), endedAt: Date.parse('2026-10-01T12:02:30Z'),
+  });
+  expect(entries.find(s => s.id === 'empty')?.completionMetrics).toBeUndefined();
 });

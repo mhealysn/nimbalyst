@@ -20,6 +20,7 @@ import {
   ghCliStatusAtom,
   prRemoteAtom,
   prListUpdatedAtom,
+  prListAtom,
 } from '../atoms/pullRequests';
 import { activeWorkspacePathAtom } from '../atoms/openProjects';
 import { getGhCliService } from '../../services/RendererGhCliService';
@@ -32,6 +33,19 @@ export function initPullRequestListeners(): () => void {
 
   const ghService = getGhCliService();
   const prService = getPullRequestService();
+  const pollingWorkspaces = new Set<string>();
+  let listRequest = 0;
+  const refreshList = async (workspacePath: string, remote: string) => {
+    const request = ++listRequest;
+    try {
+      const rows = await prService.list(workspacePath, remote, { state: 'all' });
+      if (!disposed && request === listRequest && store.get(activeWorkspacePathAtom) === workspacePath) {
+        store.set(prListAtom, rows);
+      }
+    } catch (error) {
+      console.error('[pullRequestListeners] Failed to refresh PR status:', error);
+    }
+  };
 
   // Initial gh status probe so the onboarding banner reflects reality on
   // first paint instead of waiting for a change event that may never come.
@@ -56,11 +70,14 @@ export function initPullRequestListeners(): () => void {
       if (disposed) return;
       listUpdatedVersion += 1;
       store.set(prListUpdatedAtom, { version: listUpdatedVersion, payload });
+      if (store.get(activeWorkspacePathAtom) === payload.workspacePath) void refreshList(payload.workspacePath, payload.remote);
     }),
   );
 
   // Detect the GitHub remote for a workspace and publish it to prRemoteAtom.
   const detectRemoteFor = async (workspacePath: string | null): Promise<void> => {
+    listRequest++;
+    store.set(prListAtom, []);
     if (!workspacePath) {
       store.set(prRemoteAtom, null);
       return;
@@ -71,6 +88,14 @@ export function initPullRequestListeners(): () => void {
       // Guard against a stale resolve after the user switched projects.
       if (store.get(activeWorkspacePathAtom) !== workspacePath) return;
       store.set(prRemoteAtom, result ? { workspacePath, ...result } : null);
+      if (result) {
+        pollingWorkspaces.add(workspacePath);
+        await prService.startPolling(workspacePath, workspacePath, result.remote)
+          .catch(error => console.error('[pullRequestListeners] Failed to start polling:', error));
+        if (disposed) { await prService.stopPolling(workspacePath); return; }
+        if (store.get(activeWorkspacePathAtom) !== workspacePath) return;
+        void refreshList(workspacePath, result.remote);
+      }
     } catch {
       if (!disposed) store.set(prRemoteAtom, null);
     }
@@ -87,5 +112,8 @@ export function initPullRequestListeners(): () => void {
   return () => {
     disposed = true;
     cleanups.forEach((cleanup) => cleanup());
+    for (const workspacePath of pollingWorkspaces) {
+      void prService.stopPolling(workspacePath).catch(error => console.error('[pullRequestListeners] Failed to stop polling:', error));
+    }
   };
 }

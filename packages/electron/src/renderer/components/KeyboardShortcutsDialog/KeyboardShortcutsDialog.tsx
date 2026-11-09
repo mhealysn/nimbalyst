@@ -136,6 +136,12 @@ export function KeyboardShortcutsDialog({ isOpen, onClose }: KeyboardShortcutsDi
   // Application shortcuts come from shared/KeyboardShortcuts.ts; canvas shortcuts come from the runtime keymap.
   const generalShortcuts: ShortcutGroup[] = [
     {
+      title: 'Voice Mode',
+      shortcuts: [
+        { label: 'Start / Wake / Stop Voice Mode (global; Voice Mode enabled)', shortcut: KeyboardShortcuts.voice.toggle },
+      ],
+    },
+    {
       title: 'File',
       shortcuts: [
         { label: 'New File / New Session', shortcut: KeyboardShortcuts.file.newFile }, // shared/KeyboardShortcuts.ts:9 - Cmd+N
@@ -183,6 +189,8 @@ export function KeyboardShortcutsDialog({ isOpen, onClose }: KeyboardShortcutsDi
         { label: 'Toggle Terminal Panel', shortcut: KeyboardShortcuts.view.toggleTerminalPanel }, // shared/KeyboardShortcuts.ts:48 - Ctrl+`
         { label: 'Toggle Claude CLI Terminal Drawer', shortcut: KeyboardShortcuts.view.toggleCliTerminalDrawer }, // Ctrl+Shift+` — active claude-code-cli session only
         { label: 'Tracker Mode', shortcut: KeyboardShortcuts.view.trackerMode }, // shared/KeyboardShortcuts.ts:49 - Cmd+T
+        { label: 'Open Planner', shortcut: KeyboardShortcuts.view.trackerPlanner },
+        { label: 'Open Agenda', shortcut: KeyboardShortcuts.view.agendaMode },
         { label: 'Wiki', shortcut: KeyboardShortcuts.view.collabMode }, // shared/KeyboardShortcuts.ts:50 - Cmd+D
         { label: 'Organization', shortcut: KeyboardShortcuts.view.orgMode }, // Cmd+Alt+M — only when the project belongs to an organization
         { label: 'Toggle Sidebar', shortcut: KeyboardShortcuts.view.toggleSidebar }, // shared/KeyboardShortcuts.ts:51 - Cmd+B

@@ -1,3 +1,4 @@
+import { TrackerCompletionMetrics } from './CompletionMetrics';
 /**
  * TrackerItemDetail - Detail/edit panel for a selected tracker item.
  * Shows all model-defined fields with real editors, description area,
@@ -238,18 +239,19 @@ export const TrackerItemDetail: React.FC<TrackerItemDetailProps> = ({
   // External-source provenance (source chip). origin lives in record system metadata.
   const externalOrigin =
     item?.system?.origin?.kind === 'external' ? item.system.origin.external : null;
+  const externalUrn = typeof externalOrigin?.urn === 'string' ? externalOrigin.urn.trim() : '';
   const [importerSummaries, setImporterSummaries] = useState<
     Array<{ id: string; displayName: string; icon: string }>
   >([]);
   const [resnapshotting, setResnapshotting] = useState(false);
   const [bodyBusy, setBodyBusy] = useState(false);
   const handleResnapshot = useCallback(async () => {
-    if (!externalOrigin || !workspacePath || resnapshotting) return;
+    if (!externalUrn || !workspacePath || resnapshotting) return;
     setResnapshotting(true);
     try {
       await window.electronAPI.invoke('tracker:importer:resnapshot', {
         workspacePath,
-        urn: externalOrigin.urn,
+        urn: externalUrn,
       });
     } catch (e) {
       errorNotificationService.showError(
@@ -259,15 +261,15 @@ export const TrackerItemDetail: React.FC<TrackerItemDetailProps> = ({
     } finally {
       setResnapshotting(false);
     }
-  }, [externalOrigin, workspacePath, resnapshotting]);
+  }, [externalUrn, workspacePath, resnapshotting]);
   const handleBodyAction = useCallback(
     async (action: 'applyBody' | 'dismissBody') => {
-      if (!externalOrigin || !workspacePath || bodyBusy) return;
+      if (!externalUrn || !workspacePath || bodyBusy) return;
       setBodyBusy(true);
       try {
         await window.electronAPI.invoke(`tracker:importer:${action}`, {
           workspacePath,
-          urn: externalOrigin.urn,
+          urn: externalUrn,
         });
       } catch (e) {
         errorNotificationService.showError(
@@ -278,7 +280,7 @@ export const TrackerItemDetail: React.FC<TrackerItemDetailProps> = ({
         setBodyBusy(false);
       }
     },
-    [externalOrigin, workspacePath, bodyBusy]
+    [externalUrn, workspacePath, bodyBusy]
   );
   useEffect(() => {
     if (!externalOrigin || !workspacePath) return;
@@ -292,7 +294,6 @@ export const TrackerItemDetail: React.FC<TrackerItemDetailProps> = ({
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [externalOrigin?.providerId, workspacePath]);
 
   // Resolve linked sessions from registry via the shared resolver so this view
@@ -751,9 +752,9 @@ export const TrackerItemDetail: React.FC<TrackerItemDetailProps> = ({
           {externalOrigin && (() => {
             const summary = importerSummaries.find((s) => s.id === externalOrigin.providerId);
             const installed = Boolean(summary);
-            const ref = externalOrigin.urn.includes('://')
-              ? externalOrigin.urn.split('://')[1]
-              : externalOrigin.externalId;
+            const ref = externalUrn.includes('://')
+              ? externalUrn.split('://')[1]
+              : externalOrigin.externalId || externalOrigin.url || 'Source reference unavailable';
             return (
               <div
                 className="flex items-center gap-1.5 mt-1.5 text-[11px]"
@@ -772,9 +773,9 @@ export const TrackerItemDetail: React.FC<TrackerItemDetailProps> = ({
                   <button
                     type="button"
                     className="ml-1 inline-flex items-center text-nim-muted hover:text-nim-accent disabled:opacity-50"
-                    title="Pull latest from source"
+                    title={externalUrn ? 'Pull latest from source' : 'Source reference is missing; refresh is unavailable'}
                     data-testid="tracker-source-resnapshot"
-                    disabled={resnapshotting}
+                    disabled={resnapshotting || !externalUrn}
                     onClick={handleResnapshot}
                   >
                     <MaterialSymbol icon={resnapshotting ? 'hourglass_empty' : 'sync'} size={12} />
@@ -925,7 +926,7 @@ export const TrackerItemDetail: React.FC<TrackerItemDetailProps> = ({
           <button
             type="button"
             className="px-2 py-0.5 rounded text-white bg-[var(--nim-primary)] hover:opacity-90 disabled:opacity-50"
-            disabled={bodyBusy}
+            disabled={bodyBusy || !externalUrn}
             onClick={() => handleBodyAction('applyBody')}
           >
             Update body
@@ -933,7 +934,7 @@ export const TrackerItemDetail: React.FC<TrackerItemDetailProps> = ({
           <button
             type="button"
             className="px-2 py-0.5 rounded border border-nim text-nim-muted hover:bg-nim-tertiary disabled:opacity-50"
-            disabled={bodyBusy}
+            disabled={bodyBusy || !externalUrn}
             onClick={() => handleBodyAction('dismissBody')}
           >
             Dismiss
@@ -951,6 +952,8 @@ export const TrackerItemDetail: React.FC<TrackerItemDetailProps> = ({
       >
         {!focusActive && (
         <>
+        <TrackerCompletionMetrics item={item} />
+
         {/* Linked Sessions -- kept at the top so they're visible without scrolling */}
         {(linkedSessions.length > 0 || onLaunchSession || onLaunchWorktree || canLinkExistingSession || isLinkingExistingSession) && (
           <div className="tracker-sessions-section">

@@ -91,6 +91,7 @@ Twelve built-in provider lanes, plus any agent an extension contributes. Every l
 - Shareable session links (E2E encrypted, 1/7/30 day expiry)
 - Live import of external Claude Code and Codex CLI sessions — opt in with **Follow external agent sessions** under **Settings → Agent Features** (OFF by default); follow sessions in open workspaces and their worktrees into the session list and open transcripts, including later title updates while preserving names set in Nimbalyst
 - Manual import of earlier Claude Code and Codex CLI sessions remains available with live following OFF
+- Local desktop session sync — opt in under **Settings → Agent Features → Sync to local Codex and Claude**, or use **Sync projects and sessions now**. Copies conversation text from all providers into existing local Codex and Claude data with project/worktree paths and session names; idle sessions sync every minute. Codex projects are registered through its native app-server API; Claude Desktop discovers copies through `/resume` in its Code tab. Copies stop updating after a desktop continuation or a source-history rewrite; tool state, attachments, system prompts and private reasoning are not transferred. Missing local data directories are left untouched
 - Session draft persistence (unsent input preserved)
 - Read/unread indicators, with mark-all-read actions for a workstream and the macOS menu bar sessions panel
 - Auto-continue sessions after app restart
@@ -108,14 +109,17 @@ Twelve built-in provider lanes, plus any agent an extension contributes. Every l
 
 ## Session Kanban Board
 
-- Sessions organized into phase columns (backlog / planning / implementing / validating / complete)
-- Configurable columns
+- Session board follows live status in Backlog / Blocked / Running / Awaiting Input / Git status / Review / Done, including questions, structured input, permissions and commit approvals; grouped cards surface waiting and blocked descendants. A red Blocked lane follows linked tickets' open dependencies and manual blocked statuses, takes precedence over running agents and input requests (including grouped descendants), returns sessions to their operational lanes when blockers clear, and supports manual placement until activity changes
+- Git status groups idle work into Ready for commit / Ready for push / Ready for PR using working-tree changes and tracked upstream counts; open PRs stay in Review and only confirmed merged PRs reach Done, including archived sessions and manual drags. Local commits keep linked tasks open until their PR merges; background polling reconciles merges without opening the PR panel
+- Manual drags persist until operational status changes; cards open live sessions on click and show linked Jira keys/titles, provider, branch and live activity age, with counts and collapsible columns
+- Done session cards and completed tracker tickets show recorded lifetime tokens (including reported cache use), transcript elapsed time, provider-reported USD cost when available, and session counts, with deduplicated descendant totals and explicit missing/partial data; tracker details show the same linked-session totals
 - Agent-assisted cleanup (`/session-cleanup` slash command in the Planning extension) — audits sessions, proposes phase corrections and "mark complete" candidates for approval, and flags old sessions to archive
 - Workspace coaching (`/planning:nimbalyst-coach` slash command in the Planning extension) — reviews the project and recent sessions, then recommends extensions matching the project's file types, product features going unused, and additions to the project's agent instructions; read-only until the user approves each edit
 
 ## Agent Mode
 
 - Full-screen AI session interface
+- Workspace session tabs with a second conversation pane; switch between open sessions and the board or close views while agents continue running, and restore open tabs and the split after restart
 - Agent navigation badge with a grouped list of sessions awaiting input, running, or unread
 - Plan mode toggle (Shift+Tab)
 - Suggested next prompt for Claude Code sessions (on by default, toggle under Agent Features): shown in the empty input after a turn you started, Tab fills it in; skipped for turns started by agents or automations
@@ -158,7 +162,7 @@ Twelve built-in provider lanes, plus any agent an extension contributes. Every l
 
 ## Git Worktrees
 
-- Create isolated worktrees for AI coding sessions (Cmd+Alt+W)
+- Create isolated worktrees for AI coding sessions (Cmd+Alt+W). With Git Worktrees enabled, new local sessions and tracker launches in Git repositories create a worktree from the current branch by default. Commit with AI uses the checkout containing the selected changes.
 - Multiple sessions per worktree
 - Merge worktree into base branch
 - Rebase onto base branch
@@ -188,6 +192,7 @@ Twelve built-in provider lanes, plus any agent an extension contributes. Every l
 - Real-time git status in file tree (modified, added, deleted, untracked)
 - Git operations panel with a Changes list where users select files and commit directly or ask AI to write the message
 - AI-assisted commit message generation
+- After a successful coding turn with uncommitted changes, choose Commit, Commit & Push, or Commit, Push & Open PR from the session composer; requests reuse the session's AI commit proposal flow, with a Later option to dismiss them
 - Interactive git commit proposal widget with individual-hunk selection to commit only the intended lines of a shared file
 - Commit proposals can target another registered worktree of the session's repository; the widget names its branch and path, and these commits always need approval on desktop, even with auto-commit on
 - Commit history view with ahead/behind tracking and links to the AI sessions that produced commits
@@ -238,6 +243,7 @@ Twelve built-in provider lanes, plus any agent an extension contributes. Every l
 
 ## Voice Mode
 
+- Global keyboard shortcut starts, wakes, or stops desktop Voice Mode from another app (Control+Shift+V on macOS; Control+Alt+Shift+V on Windows/Linux); targets the active voice conversation or last-used project window, and releases the shortcut when Voice Mode is disabled
 - Desktop voice control with GPT Live and GPT Realtime engines; model and voice selection in Voice Mode settings
 - Selectable model and reasoning effort in settings
 - Live transcription streaming
@@ -370,8 +376,13 @@ Companion app; pairs with a desktop over encrypted sync. Voice mode is not inclu
 
 ## Tracker System
 
-- Tracker mode (Cmd+T) with list, table, grid, kanban, tag-board, timeline, and inbox views
+- Ticket Planner (desktop) -- the Tracker toolbar's Planner button opens an interactive dependency DAG, a suggested execution queue, or a collapsible hierarchy timeline. The DAG lays out prerequisite-to-dependent arrows from left to right, distinguishes subtask closeout links, outlines each node in its configured ticket status color, and opens the selected ticket in the existing resizable right sidebar. Pan, zoom, fit-all, selected-path highlighting and next-ready navigation help explore independent work; cyclic links are flagged separately without claiming a valid order. Subtasks and dependencies precede parent closeout and dependent work; earlier parent/dependent deadlines flow back to prerequisites, with priority breaking ties. Ready-only filtering, clickable tickets and prerequisites, timeline scale controls, overdue/date-conflict warnings, and holds for missing links or cycles help choose the next task without changing stored dates or inventing task durations. It follows the current Tracker filters and uses the full workspace corpus to resolve hidden or completed prerequisites.
+
+- Tracker mode (Cmd+T) with list, table, grid, kanban, calendar, tag-board, timeline, and inbox views; Cmd+Option+P (Ctrl+Alt+P on Windows/Linux) opens the Planner from any workspace mode, leaves focused ticket documents, and surfaces it over fullscreen panels. The same command is available in View > Planner and the keyboard-shortcut help.
+- **Task calendar and daily reminders** -- Calendar view in Trackers shows tasks on their Scheduled Date (ON, blue/info) and Due Date (BY, amber/warning), with month navigation, date jump, a selected-day agenda, an option to include earlier deadlines, and an undated-task list. A task can have both dates; existing due dates remain deadlines. Desktop reminders summarize active scheduled, due, and overdue workspace tasks on each app launch and at configurable daily local times (5 AM and 8 AM by default). Startup reminders wait for restored workspace task services and retry if tasks have not loaded or delivery is suppressed. Each daily time reminds independently, with delivery remembered across restarts; a late launch or wake combines elapsed times into one current summary. Nimbalyst must be running with the workspace open and desktop notifications enabled; this does not schedule phone push or reminders while the desktop app is quit.
+- Tasks have a single parentTask and inverse subtasks relationships, independent child status and optional session links; agents reuse or create subtasks for meaningful decomposition, and Task and All list/kanban views support persisted parent-task filters
 - Board lanes and timeline grouping by milestone, goal, or another field, with drag-and-drop and bulk assignment
+- Desktop ticket Kanban automatically separates work waiting on open dependencies into a Blocked column, shows each visible blocker's reference, title and status on the card, and returns tickets to their saved workflow/grouping when every blocker clears; blocker links open ticket details, filtered blockers still gate work, and cycles are called out. Previously started local linked agents resume through the existing prompt queue after their tickets become ready, with restart-safe waits, duplicate prevention, dispatch-time dependency checks, and the existing busy/input/permission guards; completed, archived, unstarted and remote-mirror sessions are excluded. This runs while Nimbalyst and the workspace are open, independently of the visible view.
 - Full-document tracker view with collaborative body editing, inline comments, editable field chips, AI chat, and shareable reopen links
 - Tag-board view with one column per tag (items appear in every matching column, plus an Untagged column)
 - Saved views: name, save, apply, and delete reusable filter/layout views per workspace; a view captures the whole table state (columns, widths, per-column filters), and can be shared with the team so a colleague opens the same view
@@ -390,11 +401,15 @@ Companion app; pairs with a desktop over encrypted sync. Voice mode is not inclu
 - Tracker-item context menus open linked AI sessions or launch a new session or worktree; draft plans with linked commits show a status-mismatch chip
 - Unread indicators — a dot on tracker rows/cards (list, kanban, tag board) when an item is new or was changed by someone else since you last viewed it; clears when you open it; your own edits and views sync across your devices (personal channel), and AI-agent edits count as unread
 - Encrypted sync across team members (server-managed, encrypted at rest per team)
-- Inline `#type` items in markdown (TrackerPlugin)
+- Trackers show explicitly created and imported items; scanning or editing Markdown no longer adds automatic file cards, and previously indexed file projections stay out of tracker lists without deleting their source documents
+- Legacy inline `#type` embeds remain readable in Markdown (TrackerPlugin); convert them to tracked references to create native tracker items
 - Live tracker reference links — `#` in a document references an existing tracker item, inserting a chip that shows the item's current status and title (resolved live, not a snapshot) and links to it; serialized as portable `[NIM-123](nimbalyst://NIM-123)` markdown; the same link renders as a live chip in the AI transcript; one-click "convert to tracked reference" turns a legacy inline embed into a real tracked item plus a reference chip
 - Tracker schema overrides in Trackers settings -- customize a built-in type into `.nimbalyst/trackers`, edit an existing override, reset back to the built-in default, and resync the local database mirror when schema files drift. A personal tracker type can be shared with the team from its right-click menu in the tracker sidebar or the Wiki's Personal Types table, and a notice shows when a project's team types are not syncing
 - External-source importers: import GitHub issues (extension-provided) into the tracker as native bug, task, or feature items with a back-link to the source, a "from GitHub" chip, re-snapshot ("pull latest from source") with conservative merge, and a Source filter; agent tools `tracker_importer_list` / `tracker_importer_search` / `tracker_import` / `tracker_resnapshot` / `tracker_get_by_urn`
+- Calendar: a default-visible gutter button labeled Agenda opens imported Google and Microsoft events in a month grid with a daily agenda, event details, calendar visibility filters, source links, and immediate refresh. Command–Option–A on macOS or Control–Alt–A on Windows and Linux opens Agenda from any workspace view, including focused editors and fullscreen panels; the shortcut appears in the gutter tooltip, View menu, and keyboard help. Account setup stays on one Calendar imports settings page with an Open calendar action. Read-only browser sign-in uses PKCE and encrypted local credentials and snapshots. Automatic refresh runs every five minutes, at startup, and after wake/network recovery over a rolling seven-day history and ninety-day future window; each account can pause automation for custom date-range imports, with visible failures and live calendar updates.
+- Linear import: OS-encrypted personal API key, paginated project selection in Application Settings → Linear, separate local workspaces for selected projects with their descriptions and all tickets (including completed tickets), per-ticket failure reporting and safe repeat imports that preserve local edits. Import individual tickets into an existing workspace through the tracker Import menu, with Linear source links and conservative pull-latest support. Desktop
 - Jira Cloud connector: OS-encrypted site/email/API-token credentials, project-level editable JQL and **Sync Jira**, paginated REST v3 search and comments, ADF-to-markdown descriptions and attributed dated comments in native tasks with source links, deduplication by site and issue key, refresh that protects running/waiting sessions, per-issue error isolation, and optional auto-sync (off by default).
+- Context-aware Jira agent launches: **Launch Session** and **Launch Worktree** prepare canonical tracker content and a separate read-only Jira refresh with descriptions, embedded or discovered/configured acceptance criteria, and paginated attributed comments. Explicit availability/freshness markers and durable complete context files cover partial failures and oversized tickets without replacing local additions. Shared instructions direct supported agents to investigate repository and connected-service evidence, default AWS work to dev unless the user or ticket explicitly specifies another environment, verify the target account/role/region before AWS changes, use durable interactive clarification before dependent work, and validate every criterion; launch remains a draft and performs no Jira writes.
 - Per-project "AI Agent Access" toggle in tracker settings -- allow or block AI agents from using tracker tools in that project (on by default)
 - Knowledge kinds (earlier knowledge graph; the Wiki skills no longer create them) -- existing entity, claim, question, finding, and investigation trackers and a project's labels.yaml still load and sync, and values stored with qualifiers keep them when edited. The desktop no longer shows claim statements, qualifier editors, or Add statement, and agents can no longer author labels; the frozen web-console wiki still reads them
 - Ontology inspector (web console Tracker setup) -- a read-only "What we track" view of a team project: the categories it tracks with examples, how completely each relationship between them is recorded, and a "Worth fixing" list of gaps, with links to the wiki's Types section, where per-label health and proposals live. Health checks report pages missing the statements their labels expect, statements whose target has the wrong label, unknown labels, undeclared properties, label cycles, and near-duplicate labels, and never block a write. Each gap drafts an ontology proposal (add a label or property, give a label a property or broader label, extend a range, apply or split a label) that is previewed, accepted or rejected per change, applied, and undoable
@@ -548,7 +563,7 @@ Companion app; pairs with a desktop over encrypted sync. Voice mode is not inclu
 - System tray with session status and click-to-navigate
 - macOS menu bar fleet monitoring -- follow active sessions, see which need attention, and open them from the menu bar
 - Dock badge for sessions needing attention
-- OS notifications for session events
+- OS notifications for sessions awaiting input and ready for review, with independent application settings for each type and click-to-open session routing. Existing companion push delivery respects the same type preferences; review pushes retain desktop presence suppression.
 - Sound notifications
 - Auto-updater with toast notification
 - Deferred restart (waits for active AI sessions)

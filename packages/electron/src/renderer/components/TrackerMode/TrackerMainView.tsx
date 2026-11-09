@@ -2,6 +2,7 @@ import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { useAtomValue, useSetAtom } from 'jotai';
 import { activeFileRepoPathAtom } from '../../store/atoms/workspaceRepos';
 import { copyToClipboard, MaterialSymbol } from '@nimbalyst/runtime';
+import { KeyboardShortcuts, getShortcutDisplay } from '../../../shared/KeyboardShortcuts';
 import { TrackerUnreadDot } from '@nimbalyst/runtime/readReceipts/TrackerUnreadDot';
 import type { TrackerIdentity } from '@nimbalyst/runtime';
 import { trackerRadarActorKey, type RadarLaneEnrichment, type RadarPresence } from '@nimbalyst/tracker-core';
@@ -30,6 +31,7 @@ import {
 import { KanbanBoard } from './KanbanBoard';
 import { TrackerGridView } from './TrackerGridView';
 import { TrackerInboxView } from './TrackerInboxView';
+import { TrackerPlannerView } from './TrackerPlannerView';
 import {
   TrackerItemDetail,
   type TrackerContentMode,
@@ -47,6 +49,7 @@ import {
   TrackerViewHeaderControls,
   TrackerRadarView,
   TrackerTimelineView,
+  TrackerCalendarView,
   TrackerViewTitle,
   useTrackerViewRows,
   type TrackerFilterField,
@@ -75,7 +78,7 @@ import {
 } from '@nimbalyst/runtime/plugins/TrackerPlugin/models';
 import { resolveTrackerWriteAccess } from '@nimbalyst/runtime/plugins/TrackerPlugin/models/trackerLifecycle';
 import { useTrackerBodyPrewarm } from '../../hooks/useTrackerBodyPrewarm';
-import { agentSessionAttentionAtom, setSelectedWorkstreamAtom, sessionRegistryAtom, refreshSessionListAtom, initSessionList } from '../../store/atoms/sessions';
+import { agentSessionAttentionAtom, setSelectedWorkstreamAtom, sessionRegistryAtom, refreshSessionListAtom, trackerSessionMetricsActiveAtom, initSessionList } from '../../store/atoms/sessions';
 import {
   trackerItemsMapAtom,
   trackerRelationshipLabelAtom,
@@ -86,7 +89,6 @@ import type { TrackerLinkedSessionOption } from '@nimbalyst/runtime/plugins/Trac
 import { workstreamStateAtom } from '../../store/atoms/workstreamState';
 import { setWindowModeAtom } from '../../store/atoms/windowMode';
 import { defaultAgentModelAtom, worktreesFeatureAvailableAtom } from '../../store/atoms/appSettings';
-import { ModelIdentifier } from '@nimbalyst/runtime/ai/server/types';
 import { store } from '../../store';
 import { createTrackerItem, isLocalWikiRecord } from '../../services/localWikiTrackerRecords';
 import { deleteLocalWikiItem, refuseLocalWikiArchive } from '../../services/localWikiTrackerWrites';
@@ -103,6 +105,7 @@ import { SOURCE_FILTER_FIELD, sourceFilterField, splitSourceClause, withSourceCl
 import { TrackerNewMenu } from './TrackerNewMenu';
 import { useGitRepoProbe } from '../../hooks/useGitRepoProbe';
 import {
+  createDefaultSessionWorktree,
   createNewWorktreeSessionActionAtom,
 } from '../../store/actions/sessionHistoryActions';
 import { setTrackerFavoriteAtom } from '../../store/atoms/trackerPersonalState';
@@ -111,6 +114,8 @@ import { WorktreeBaseBranchPicker } from '../AgenticCoding/WorktreeBaseBranchPic
 import {
   assertTrackerItemInWorkspace,
   buildTrackerLaunchContext,
+  prepareTrackerLaunchContext,
+  createTrackerSession,
   createTrackerWorktreeSession,
   isTrackerLaunchForWorkspace,
   type TrackerLaunchContext,
@@ -121,6 +126,7 @@ import { confirmTrackerItemDelete } from './confirmTrackerItemDelete';
 import { orgPresenceAtomFamily } from '../../store/atoms/teamInbox';
 import { gitStatusAtom } from '../../store/atoms/gitOperations';
 import type { TeamMemberOption } from '@nimbalyst/runtime/plugins/TrackerPlugin/components/TrackerFieldEditor';
+import { TaskReminderSettings } from './TaskReminderSettings';
 
 export type ViewMode = TrackerViewMode;
 
@@ -189,6 +195,7 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
   onExitSavedView,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
+  const previousPlannerViewMode = useRef(viewMode);
   const [quickAddType, setQuickAddType] = useState<string | null>(null);
   const [pendingWorktreeLaunch, setPendingWorktreeLaunch] = useState<TrackerLaunchContext | null>(null);
   const pendingLaunchIsCurrent = isTrackerLaunchForWorkspace(pendingWorktreeLaunch, workspacePath);
@@ -253,18 +260,27 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
     };
   }, [agentAttention.running.length, currentRadarActorKey, gitStatus?.ahead, gitStatus?.behind]);
 
+  const setMetricsActive = useSetAtom(trackerSessionMetricsActiveAtom);
+  const refreshMetricsSessions = useSetAtom(refreshSessionListAtom);
   useEffect(() => {
     if (!workspacePath) return;
-    void initSessionList(workspacePath);
-  }, [workspacePath]);
+    setMetricsActive(true);
+    void initSessionList(workspacePath).then(() => refreshMetricsSessions());
+    return () => { setMetricsActive(false); void refreshMetricsSessions(); };
+  }, [workspacePath, setMetricsActive, refreshMetricsSessions]);
 
   // Drive the per-item "unread" dots from the local read-receipt store.
   useTrackerUnread(workspacePath, currentIdentity?.email ?? null);
 
   // Selected item for detail panel
   const modeLayout = useAtomValue(trackerModeLayoutAtom);
-  const resolveRelationshipLabel = useAtomValue(trackerRelationshipLabelAtom);
   const setModeLayout = useSetAtom(setTrackerModeLayoutAtom);
+  const plannerOpen = modeLayout.plannerOpen;
+  useEffect(() => {
+    if (previousPlannerViewMode.current !== viewMode) setModeLayout({ plannerOpen: false });
+    previousPlannerViewMode.current = viewMode;
+  }, [viewMode, setModeLayout]);
+  const resolveRelationshipLabel = useAtomValue(trackerRelationshipLabelAtom);
   // Display Settings for the selected type; the root layout fields are only the
   // fallback behind these, so nothing here reads them directly.
   const viewSettings = useAtomValue(trackerActiveViewSettingsAtom);
@@ -456,48 +472,26 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
       return;
     }
     try {
-      const trackerContext = buildTrackerLaunchContext(trackerItemId, trackerItem);
+      const trackerContext = await prepareTrackerLaunchContext(trackerItemId, trackerItem, (channel, args) => window.electronAPI.invoke(channel, args));
+      const launchWorkspace = trackerContext.workspacePath;
+      const worktree = isWorktreesFeatureAvailable && launchWorkspace && launchWorkspace === store.get(activeWorkspacePathAtom)
+        ? await createDefaultSessionWorktree(launchWorkspace, store.get(activeFileRepoPathAtom) ?? undefined)
+        : undefined;
+      const sessionId = await createTrackerSession(trackerContext, defaultModel,
+        () => store.get(activeWorkspacePathAtom), (channel, ...args) => window.electronAPI.invoke(channel, ...args), worktree?.id);
 
-      // Derive provider from the user's default model rather than hardcoding
-      // 'claude-code'. Mirrors AgentMode.createNewSession so a Codex-only
-      // workspace launches a Codex session, not a failed claude-code one.
-      // See nimbalyst#176.
-      const sessionId = crypto.randomUUID();
-      const parsedModel = defaultModel ? ModelIdentifier.tryParse(defaultModel) : null;
-      const provider = parsedModel?.provider || 'claude-code';
-      const result = await window.electronAPI.invoke('sessions:create', {
-        session: {
-          id: sessionId,
-          provider,
-          model: defaultModel,
-          title: 'New Session',
-        },
-        workspaceId: workspacePath,
+      // Refresh session list to pick up the new session, then navigate
+      await refreshSessionList();
+      setSelectedWorkstream({
+        workspacePath: workspacePath || '',
+        selection: { type: worktree ? 'worktree' : 'session', id: sessionId },
       });
-      if (result?.success && result?.id) {
-        await window.electronAPI.invoke('tracker:link-session', {
-          trackerId: trackerContext.trackerLinkId,
-          sessionId: result.id,
-        });
-        await window.electronAPI.invoke(
-          'ai:saveDraftInput',
-          result.id,
-          trackerContext.draftInput,
-          workspacePath,
-        );
-
-        // Refresh session list to pick up the new session, then navigate
-        await refreshSessionList();
-        setSelectedWorkstream({
-          workspacePath: workspacePath || '',
-          selection: { type: 'session', id: result.id },
-        });
-        setWindowMode('agent');
-      }
+      setWindowMode('agent');
     } catch (err) {
       console.error('[TrackerMainView] Failed to launch session:', err);
+      errorNotificationService.showError('Session not started', (err as Error).message);
     }
-  }, [workspacePath, refreshSessionList, setSelectedWorkstream, setWindowMode, defaultModel]);
+  }, [workspacePath, refreshSessionList, setSelectedWorkstream, setWindowMode, defaultModel, isWorktreesFeatureAvailable]);
 
   /** Launch a new isolated worktree session linked to a tracker item. */
   const handleLaunchWorktree = useCallback((trackerItemId: string) => {
@@ -522,6 +516,17 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
         store.get(activeWorkspacePathAtom),
         options,
         createNewWorktreeSession,
+        async () => {
+          const item = store.get(trackerItemsMapAtom).get(pendingWorktreeLaunch.trackerLinkId);
+          // File-backed items retain the existing launch flow.
+          if (!item) {
+            if (pendingWorktreeLaunch.trackerLinkId.startsWith('file:')) return pendingWorktreeLaunch;
+            throw new Error('The tracker item is no longer loaded. Start the launch again.');
+          }
+          assertTrackerItemInWorkspace(item, pendingWorktreeLaunch.workspacePath);
+          return prepareTrackerLaunchContext(item.id, item, (channel, args) => window.electronAPI.invoke(channel, args));
+        },
+        () => store.get(activeWorkspacePathAtom),
       );
       if (!sessionId) throw new Error('Worktree session was not created');
 
@@ -543,6 +548,7 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
   const archivedItems = useAtomValue(archivedTrackerItemsAtom(filterType));
   const allActiveItems = useAtomValue(trackerItemsByTypeAtom('all'));
   const allArchivedItems = useAtomValue(archivedTrackerItemsAtom('all'));
+  const plannerItems = useMemo(() => [...allActiveItems, ...allArchivedItems], [allActiveItems, allArchivedItems]);
   const filtersArchived = (columnFilters?.clauses ?? []).some(clause => clause.field === 'archived');
   const showArchived = activeFilters.includes('archived');
   const viewSourceItems = useMemo(
@@ -846,6 +852,13 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
   const handleCloseDetail = useCallback(() => {
     setModeLayout({ selectedItemId: null });
   }, [setModeLayout]);
+
+  const handlePlannerItemSelect = useCallback((itemId: string) => {
+    // Graph selection always uses the right detail panel, including tickets
+    // whose last saved presentation was the full document view.
+    setItemView({ itemId, view: 'item' });
+    handleItemSelect(itemId);
+  }, [handleItemSelect, setItemView]);
 
   /** Swap the document in place when a row in the slim list pane is clicked. */
   const handleOpenItemAsDocument = useCallback((itemId: string) => {
@@ -1212,6 +1225,17 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
           onLayoutChange={handleViewLayoutChange}
         />
 
+        <button
+          type="button"
+          className={`tracker-planner-toggle inline-flex items-center gap-1.5 rounded px-2 py-1 text-xs ${plannerOpen ? 'bg-nim-active text-nim' : 'text-nim-muted hover:bg-nim-hover'}`}
+          aria-pressed={plannerOpen}
+          onClick={() => setModeLayout({ plannerOpen: !plannerOpen })}
+          title={`Plan work by dependencies, subtasks and due dates (${getShortcutDisplay(KeyboardShortcuts.view.trackerPlanner)})`}
+        >
+          <MaterialSymbol icon="account_tree" size={16} />
+          Planner
+        </button>
+
         <TrackerNewMenu
           workspacePath={workspacePath}
           // Non-creatable types (e.g. automations) keep the import menu but not New.
@@ -1228,6 +1252,24 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
             <div className="h-full flex items-center justify-center text-sm text-nim-muted" data-testid="tracker-personal-state-loading">
               Loading personal tracker state...
             </div>
+          ) : plannerOpen ? (
+            <TrackerPlannerView
+              items={viewFilteredItems}
+              allItems={plannerItems}
+              selectedItemId={selectedItemId}
+              onItemSelect={handlePlannerItemSelect}
+              menuActions={{
+                onOpenDocument: handleOpenItemAsDocument,
+                onCopyDeepLink: teamOrgId ? handleCopyDeepLink : undefined,
+                getLinkedSessions: getLinkedSessionOptions,
+                onOpenSession: handleSwitchToAgentMode,
+                onLaunchSession: handleLaunchSession,
+                onLaunchWorktree: isWorktreesFeatureAvailable && isGitRepo !== false ? handleLaunchWorktree : undefined,
+                onArchiveItems: handleArchiveItems,
+                onDeleteItems: handleDeleteItems,
+                confirmDelete: confirmTrackerItemDelete,
+              }}
+            />
           ) : viewMode === 'list' ? (
             <TrackerTable
               filterType={filterType}
@@ -1322,6 +1364,11 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
               onItemSelect={handleItemSelect}
               onOpenDocument={handleOpenItemAsDocument}
             />
+          ) : viewMode === 'calendar' ? (
+            <div className="tracker-calendar-container flex h-full min-h-0 flex-col">
+              {workspacePath && <TaskReminderSettings key={workspacePath} workspacePath={workspacePath} />}
+              <div className="min-h-0 flex-1"><TrackerCalendarView items={viewFilteredItems} selectedItemId={selectedItemId} onItemSelect={handleItemSelect} /></div>
+            </div>
           ) : viewMode === 'timeline' ? (
             <TrackerTimelineView
               items={viewFilteredItems}
@@ -1349,6 +1396,8 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
             />
           ) : (
             <KanbanBoard
+              readinessByItemId={readinessByItemId}
+              blockerScope={blockerScope}
               filterType={filterType}
               groupBy={viewSettings.groupBy}
               ordering={viewSettings.ordering}

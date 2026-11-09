@@ -10,16 +10,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 <!-- New features go here -->
+- See dependency-blocked and manually blocked tickets and linked sessions in red Kanban columns that take precedence over running or awaiting-input activity, with blocker links, automatic return to their workflow lanes, manual session placement, and automatic resumption of linked agents when all blockers clear, including after app restarts.
+- Choose the next tickets to complete with an interactive dependency graph, suggested work queue, and hierarchy timeline, including status-colored nodes, click-to-open ticket details in a right sidebar, and the same ticket action menu as Trackers on right-click or double-click; open the Planner from any workspace view with Command–Option–P on macOS or Control–Alt–P on Windows and Linux.
+- Start, wake, or stop Voice Mode from any app with Control+Shift+V on macOS or Control+Alt+Shift+V on Windows and Linux.
+- Open Google and Microsoft calendars from the Agenda gutter button or with Command–Option–A on macOS or Control–Alt–A on Windows and Linux, in a month view with a daily agenda, event details, visibility filters, and automatic refresh every five minutes, at startup, and after wake using a rolling date range.
+- Plan tasks with color-coded scheduled dates and deadlines in a calendar, with desktop reminders at startup and daily at 5 AM and 8 AM.
+- Import Linear projects into separate workspaces and tickets into existing trackers, with secure credentials, source links, duplicate protection, and retryable partial imports.
+- Sync conversation copies from all providers to local Codex and Claude desktop apps, preserving project folders and session names, with automatic updates and a manual sync action.
+- Choose to commit, commit and push, or commit, push and open a pull request after a coding task finishes, with an option to defer.
+- See token usage, elapsed session time, reported cost, and session counts on completed cards and tickets, with clear labels for missing or partial metrics.
+- Create linked subtasks with independent statuses and optional agent sessions, and filter task boards by parent task.
+- Sync assigned Jira Cloud issues into project tasks with secure credentials, duplicate protection, and optional automatic refresh, then launch agents with complete descriptions, acceptance criteria, comments, clarification of essential gaps, and AWS work defaulting to dev unless explicitly specified otherwise.
 - Sync assigned Jira Cloud issues into project tasks with full descriptions and comments, secure credentials, duplicate protection, and optional automatic refresh.
+- Get desktop and companion alerts when sessions need input or are ready for review, with separate controls for each event and click-to-open session navigation.
+- Open sessions in tabs or side by side, switch to the board while agents keep running, and restore open tabs and splits after restarting.
 
 ### Changed
 <!-- Changes to existing functionality go here -->
+- Start new sessions and tracker launches in a fresh Git worktree by default when Git Worktrees is enabled.
+- Refresh the light and dark themes with Linear-inspired neutral surfaces, violet accents, finer borders, compact controls, and quieter navigation while preserving the layout.
+- Session cards follow agent activity through Backlog, Blocked, Running, Awaiting Input, Git status, Review, and Done, with a distinct teal Git status accent, Ready for commit, Ready for push, and Ready for PR groups, linked Jira and branch details, task completion only after the PR merges, and archived sessions hidden from the board.
 
 ### Fixed
 <!-- Bug fixes go here -->
+- New Git worktrees automatically claim their branch so repository safety hooks allow commits without manual setup.
+- Sessions launched from a trusted workspace retain that workspace's permissions when running in a Git worktree or reopening a saved session.
 
 ### Removed
 <!-- Removed features go here -->
+- Markdown scans no longer add automatic tracker cards; existing file cards are hidden while native tasks, explicit imports, and source documents are preserved.
 
 ## [0.82.4] - 2026-10-27
 

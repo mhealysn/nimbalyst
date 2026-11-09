@@ -150,6 +150,7 @@ import { initSyncListeners } from './store/listeners/syncListeners';
 import { DatabaseMaintenanceNotice } from './components/DatabaseMaintenanceNotice';
 import { initDbMigrationListeners } from './store/listeners/dbMigrationListeners';
 import { initOpenAICodexAuthListeners } from './store/listeners/openAICodexAuthListeners';
+import { initCalendarImportListeners } from './store/listeners/calendarImportListeners';
 import { initThemeListener } from './store/listeners/themeListeners';
 import { initWindowMenuListener } from './store/listeners/windowMenuListeners';
 import { initProjectAppearanceListener } from './store/listeners/projectAppearanceListeners';
@@ -168,6 +169,7 @@ import { initUpdateListeners } from './store/listeners/updateListeners';
 import { initWalkthroughListeners } from './store/listeners/walkthroughListeners';
 import { initWakeupListeners } from './store/listeners/wakeupListener';
 import { TrackerMode } from './components/TrackerMode';
+import { CalendarMode } from './components/CalendarMode/CalendarMode';
 import { PullRequestMode, type PullRequestModeRef } from './components/PullRequestMode';
 import { CollabMode, type CollabModeRef } from './components/CollabMode';
 import { navigatePagesHistory } from './components/CollabMode/pagesTabNavigation';
@@ -445,6 +447,7 @@ export default function App() {
     const cleanupSync = initSyncListeners();
     const cleanupDbMigration = initDbMigrationListeners();
     const cleanupOpenAICodexAuth = initOpenAICodexAuthListeners();
+    const cleanupCalendarImports = initCalendarImportListeners();
     const cleanupTheme = initThemeListener();
     const cleanupThemeFallback = initThemeFallbackListener();
     const cleanupTrackerSync = initTrackerSyncListeners();
@@ -499,6 +502,7 @@ export default function App() {
       cleanupSync?.();
       cleanupDbMigration?.();
       cleanupOpenAICodexAuth?.();
+      cleanupCalendarImports();
       cleanupTheme?.();
       cleanupThemeFallback?.();
       cleanupTrackerSync?.();
@@ -1439,6 +1443,7 @@ export default function App() {
       files: 'Files',
       agent: 'Agent',
       tracker: 'Tracker',
+      calendar: 'Calendar',
       collab: 'Wiki',
       org: 'Organization',
       'pr-review': 'PR Review',
@@ -2360,6 +2365,7 @@ export default function App() {
         const sessionId = await dispatchCreateNewSession({
           title: `Commit: ${commitFiles.length} ${commitFiles.length === 1 ? 'file' : 'files'}`,
           mode: 'agent',
+          useCurrentCheckout: true,
           launchSource: 'commit_flow',
         });
 
@@ -3123,6 +3129,15 @@ export default function App() {
                     onSwitchToFilesMode={() => setActiveMode('files')}
                   />
                 )}
+              </Activity>
+            </div>
+
+            <div data-layout="calendar-mode-wrapper" className={`flex-1 flex-col overflow-hidden min-h-0 ${activeMode === 'calendar' && !isFullscreenPanelActive ? 'flex' : 'hidden'}`}>
+              <Activity mode={activeMode === 'calendar' && !isFullscreenPanelActive ? 'visible' : 'hidden'}>
+                <CalendarMode onManageAccounts={() => {
+                  navigateSettingsInPlace({ category: 'calendar-imports', scope: 'application' });
+                  setActiveMode('settings');
+                }} />
               </Activity>
             </div>
 

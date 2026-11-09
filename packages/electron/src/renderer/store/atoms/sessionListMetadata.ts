@@ -19,6 +19,8 @@ export function sessionListMetadata(
     agentRole: s.agentRole || "standard",
     createdBySessionId: s.createdBySessionId || null,
     messageCount: s.messageCount || 0,
+    hasStarted: s.hasStarted,
+    hasPendingInteractivePrompt: s.hasPendingInteractivePrompt,
     workspaceId: workspacePath,
     isArchived: s.isArchived || false,
     isPinned: s.isPinned || false,
@@ -29,12 +31,14 @@ export function sessionListMetadata(
     uncommittedCount: s.uncommittedCount || 0,
     // Kanban board phase and tags from metadata JSONB
     ...(s.phase && { phase: s.phase }),
+    ...(s.kanbanOverride && { kanbanOverride: s.kanbanOverride }),
     ...(s.tags && { tags: s.tags }),
     // Linked tracker item IDs from metadata JSONB
     ...(s.linkedTrackerItemIds && {
       linkedTrackerItemIds: s.linkedTrackerItemIds,
     }),
     ...(s.contextUsage && { contextUsage: s.contextUsage }),
+    ...(s.completionMetrics && { completionMetrics: s.completionMetrics }),
     ...(s.agentRole && { agentRole: s.agentRole }),
     ...(s.createdBySessionId !== undefined && {
       createdBySessionId: s.createdBySessionId,

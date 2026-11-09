@@ -65,6 +65,8 @@ export interface Worktree {
   baseBranch: string;
   projectPath: string;
   createdAt: number;
+  /** A checkout completed, but its post-checkout hook failed. */
+  creationWarning?: string;
 }
 
 /**
@@ -82,6 +84,10 @@ export interface WorktreeStatus {
    * When undefined, uniqueCommitsAhead equals commitsAhead.
    */
   uniqueCommitsAhead?: number;
+  /** Compared with the tracked upstream, independently of the base branch. */
+  hasUpstream?: boolean;
+  unpushedCommits?: number;
+  headSha?: string;
 }
 
 /**
@@ -265,7 +271,8 @@ export class GitWorktreeService {
         // entry's output line below names the worktree that was actually made.
         ['worktree', 'add', options.name ?? '(generated name)'],
         () => this.createWorktreeImpl(workspacePath, options),
-        (worktree) => `Created worktree ${worktree.path} on ${worktree.branch}`,
+        (worktree) => `Created worktree ${worktree.path} on ${worktree.branch}` +
+          (worktree.creationWarning ? `\nWarning: ${worktree.creationWarning}` : ''),
       )
     );
   }
@@ -311,15 +318,17 @@ export class GitWorktreeService {
     let finalWorktreeName = worktreeName;
     let counter = 1;
 
-    // If path exists, append incrementing number until we find an available path
-    while (fs.existsSync(worktreePath)) {
+    // A failed checkout can leave a branch even after its directory was removed.
+    // Preserve existing branches just as we preserve existing directories.
+    const existingBranches = new Set((await git.branchLocal()).all);
+    while (fs.existsSync(worktreePath) || existingBranches.has(`worktree/${finalWorktreeName}`)) {
       finalWorktreeName = `${worktreeName}-${counter}`;
       worktreePath = path.join(worktreesDir, finalWorktreeName);
       counter++;
     }
 
     if (counter > 1) {
-      logger.info('Worktree path already existed, using incremented name', {
+      logger.info('Worktree name already existed, using incremented name', {
         originalName: worktreeName,
         finalName: finalWorktreeName
       });
@@ -328,39 +337,107 @@ export class GitWorktreeService {
     // Create a new branch name for this worktree (ensure uniqueness)
     const branchName = `worktree/${finalWorktreeName}`;
 
+    let expectedCommit: string | undefined;
+    let creationWarning: string | undefined;
     try {
+      expectedCommit = (await git.revparse(['--verify', `${baseBranch}^{commit}`])).trim();
       // Create the worktree with a new branch
       logger.info('Creating git worktree', { worktreePath, branchName, baseBranch });
       await git.raw(['worktree', 'add', '-b', branchName, worktreePath, baseBranch]);
-
-      logger.info('Worktree created successfully', { worktreePath });
-
-      // Return worktree data
-      const worktree: Worktree = {
-        id: ulid(),
-        name: finalWorktreeName,
-        path: worktreePath,
-        branch: branchName,
-        baseBranch,
-        projectPath: workspacePath,
-        createdAt: Date.now(),
-      };
-
-      return worktree;
     } catch (error) {
-      logger.error('Failed to create worktree', { error, worktreePath, branchName });
-
-      // Clean up if worktree directory was created but git command failed
-      if (fs.existsSync(worktreePath)) {
-        try {
-          fs.rmSync(worktreePath, { recursive: true, force: true });
-          logger.info('Cleaned up failed worktree directory', { worktreePath });
-        } catch (cleanupError) {
-          logger.warn('Failed to clean up worktree directory', { cleanupError, worktreePath });
-        }
+      const message = error instanceof Error ? error.message : String(error);
+      // Git runs post-checkout AFTER registering and populating the worktree.
+      // A hook that diffs its null old HEAD fails even though checkout succeeded.
+      // Trust the on-disk Git state, not a match on localized hook output.
+      if (expectedCommit && await this.isCompletedWorktreeCheckout(git, workspacePath, worktreePath, branchName, expectedCommit)) {
+        creationWarning = `Worktree created, but post-checkout failed. Check the repository hook before relying on its setup steps.\n${message}`;
+        logger.warn('Worktree checkout completed despite post-checkout failure', { worktreePath, branchName, error });
+      } else {
+        logger.error('Failed to create worktree', { error, worktreePath, branchName });
+        // A hook may have written user data. Preserve any partial checkout and
+        // its registration rather than deleting it on a subprocess exit code.
+        const recovery = fs.existsSync(worktreePath) ? `\nPartial worktree preserved at ${worktreePath}.` : '';
+        throw new Error(`Failed to create worktree: ${message}${recovery}`);
       }
+    }
 
-      throw new Error(`Failed to create worktree: ${error instanceof Error ? error.message : String(error)}`);
+    try {
+      await this.initializeWorktreeBranchClaim(worktreePath, branchName);
+    } catch (error) {
+      logger.error('Failed to claim branch for new worktree', { error, worktreePath, branchName });
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Failed to claim branch for new worktree: ${message}\nWorktree preserved at ${worktreePath}.`);
+    }
+
+    logger.info('Worktree created successfully', { worktreePath });
+    return {
+      id: ulid(),
+      name: finalWorktreeName,
+      path: worktreePath,
+      branch: branchName,
+      baseBranch,
+      projectPath: workspacePath,
+      createdAt: Date.now(),
+      ...(creationWarning ? { creationWarning } : {}),
+    };
+  }
+
+  private async initializeWorktreeBranchClaim(worktreePath: string, branchName: string): Promise<void> {
+    const git = gitFor(worktreePath);
+    const currentBranch = (await git.raw(['symbolic-ref', '--quiet', '--short', 'HEAD'])).trim();
+    if (currentBranch !== branchName) {
+      throw new Error('The checkout changed branches before its branch could be claimed.');
+    }
+
+    // Match scripts/session.sh claim without executing repository scripts. Git
+    // resolves the private worktree directory, never the shared common dir.
+    const gitDir = (await git.revparse(['--absolute-git-dir'])).trim();
+    const claimPath = path.join(gitDir, 'SESSION_BRANCH');
+    try {
+      await fs.promises.writeFile(claimPath, `${branchName}\n`, { flag: 'wx' });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      // A post-checkout hook may already have claimed this branch. Never
+      // overwrite another claim: that would defeat the pre-commit guard.
+      const existingClaim = (await fs.promises.readFile(claimPath, 'utf8')).trim();
+      if (existingClaim !== branchName) {
+        throw new Error('The new worktree already has a conflicting branch claim.');
+      }
+    }
+  }
+
+  private async isCompletedWorktreeCheckout(
+    git: SimpleGit,
+    workspacePath: string,
+    worktreePath: string,
+    branchName: string,
+    expectedCommit: string,
+  ): Promise<boolean> {
+    try {
+      // A linked worktree has a .git file. Do not let discovery walk up to a
+      // parent repository if checkout stopped before creating that file.
+      if (!fs.statSync(path.join(worktreePath, '.git')).isFile()) return false;
+      const worktreeGit = gitFor(worktreePath);
+      const [root, commonDir, expectedCommonDir, branch, commit] = await Promise.all([
+        worktreeGit.revparse(['--show-toplevel']),
+        worktreeGit.revparse(['--git-common-dir']),
+        git.revparse(['--git-common-dir']),
+        worktreeGit.raw(['symbolic-ref', '--quiet', 'HEAD']),
+        worktreeGit.revparse(['--verify', 'HEAD']),
+      ]);
+      if (fs.realpathSync(root.trim()) !== fs.realpathSync(worktreePath) ||
+          fs.realpathSync(path.resolve(worktreePath, commonDir.trim())) !==
+            fs.realpathSync(path.resolve(workspacePath, expectedCommonDir.trim())) ||
+          branch.trim() !== `refs/heads/${branchName}` || commit.trim() !== expectedCommit) {
+        return false;
+      }
+      // A valid HEAD alone is insufficient: an interrupted checkout can leave
+      // tracked files missing. Untracked hook artifacts are safe to retain.
+      const trackedStatus = await worktreeGit.raw(['status', '--porcelain', '--untracked-files=no']);
+      return trackedStatus.length === 0;
+    } catch (error) {
+      logger.debug('Could not verify completed worktree checkout', { worktreePath, error });
+      return false;
     }
   }
 
@@ -386,6 +463,7 @@ export class GitWorktreeService {
       const currentBranch = status.current;
       const hasUncommittedChanges = !status.isClean();
       const modifiedFileCount = status.files.length;
+      const headSha = (await git.revparse(['HEAD'])).trim();
 
       if (!currentBranch) {
         // Detached HEAD -- return basic status without branch comparison
@@ -453,6 +531,9 @@ export class GitWorktreeService {
         commitsBehind,
         isMerged,
         uniqueCommitsAhead,
+        hasUpstream: Boolean(status.tracking),
+        unpushedCommits: status.tracking ? status.ahead : undefined,
+        headSha,
       };
     } catch (error) {
       logger.error('Failed to get worktree status', { error, worktreePath });

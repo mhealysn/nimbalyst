@@ -800,6 +800,44 @@
         "displayInline": true
       },
       {
+        "name": "scheduledDate",
+        "type": "date",
+        "required": false,
+        "displayInline": true
+      },
+      {
+        "name": "dueDate",
+        "type": "date",
+        "required": false,
+        "displayInline": true
+      },
+      {
+        "name": "parentTask",
+        "type": "relationship",
+        "required": false,
+        "displayInline": true,
+        "relationshipTypeKey": "child-of",
+        "targetTrackerTypes": [
+          "task"
+        ],
+        "multiValue": false,
+        "inverseFieldId": "subtasks",
+        "inverseRelationshipTypeKey": "parent-of"
+      },
+      {
+        "name": "subtasks",
+        "type": "relationship",
+        "required": false,
+        "displayInline": true,
+        "relationshipTypeKey": "parent-of",
+        "targetTrackerTypes": [
+          "task"
+        ],
+        "multiValue": true,
+        "inverseFieldId": "parentTask",
+        "inverseRelationshipTypeKey": "child-of"
+      },
+      {
         "name": "dependsOn",
         "type": "relationship",
         "required": false,
@@ -862,7 +900,8 @@
       "workflowStatus": "status",
       "priority": "priority",
       "assignee": "owner",
-      "tags": "tags"
+      "tags": "tags",
+      "dueDate": "dueDate"
     },
     "sharing": "team",
     "draftByDefault": false

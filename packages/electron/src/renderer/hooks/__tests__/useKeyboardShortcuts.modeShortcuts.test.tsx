@@ -6,6 +6,7 @@
  * Cmd+K, and nothing on screen distinguishes "switched again" from "toggled".
  */
 import React from 'react';
+import { Provider } from 'jotai';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render } from '@testing-library/react';
 import { store } from '@nimbalyst/runtime/store';
@@ -13,6 +14,8 @@ import { isShortcutClaimedByTarget, useKeyboardShortcuts } from '../useKeyboardS
 import { viewModeAtom } from '../../store/atoms/agentMode';
 import { activeWorkspacePathAtom } from '../../store/atoms/openProjects';
 import { titleBarCreateMenusAtom } from '../../store/atoms/titleBarCreate';
+import { trackerPlannerRequestAtom } from '../../store/atoms/appCommands';
+import { trackerModeLayoutAtom, setTrackerModeLayoutAtom, trackerModeDocumentItemIdAtom } from '../../store/atoms/trackers';
 import type { ContentMode } from '../../types/WindowModeTypes';
 
 vi.mock('posthog-js', () => ({ default: { capture: vi.fn() } }));
@@ -21,14 +24,15 @@ const setActiveMode = vi.fn();
 const toggleActiveLeftPane = vi.fn();
 const exitFullscreenPanel = vi.fn();
 
-function Harness({ activeMode, isFullscreenPanelActive = false, orgModeAvailable = true }: {
+function Harness({ activeMode, isFullscreenPanelActive = false, orgModeAvailable = true, workspaceMode = true }: {
   activeMode: ContentMode;
   isFullscreenPanelActive?: boolean;
   orgModeAvailable?: boolean;
+  workspaceMode?: boolean;
 }): React.ReactElement {
   useKeyboardShortcuts({
     activeMode,
-    workspaceMode: true,
+    workspaceMode,
     setActiveMode,
     activeModeStateRef: { current: activeMode },
     editorModeRef: { current: null },
@@ -58,6 +62,97 @@ beforeEach(() => {
   setActiveMode.mockReset();
   toggleActiveLeftPane.mockReset();
   exitFullscreenPanel.mockReset();
+  store.set(activeWorkspacePathAtom, '/ws/planner-shortcut');
+  store.set(setTrackerModeLayoutAtom, { plannerOpen: false, selectedItemId: null });
+});
+
+describe('Cmd+Alt+A', () => {
+  it.each<ContentMode>(['files', 'agent', 'settings', 'tracker', 'collab', 'calendar', 'org', 'pr-review'])('opens the Agenda from %s, including the macOS Option character', (activeMode) => {
+    render(<Harness activeMode={activeMode} />);
+    pressAppModifier('å', { altKey: true, code: 'KeyA' });
+    expect(setActiveMode).toHaveBeenCalledWith('calendar');
+    expect(toggleActiveLeftPane).not.toHaveBeenCalled();
+  });
+
+  it('surfaces the Agenda over a fullscreen panel and stays there on repeated presses', () => {
+    render(<Harness activeMode="calendar" isFullscreenPanelActive />);
+    pressAppModifier('a', { altKey: true, code: 'KeyA' });
+    pressAppModifier('a', { altKey: true, code: 'KeyA' });
+    expect(exitFullscreenPanel).toHaveBeenCalledTimes(2);
+    expect(setActiveMode).toHaveBeenNthCalledWith(1, 'calendar');
+    expect(setActiveMode).toHaveBeenNthCalledWith(2, 'calendar');
+  });
+
+  it('works while typing in an input', () => {
+    render(<><Harness activeMode="agent" /><input aria-label="Message" /></>);
+    const input = document.querySelector('input')!;
+    const mac = navigator.platform.startsWith('Mac');
+    const event = new KeyboardEvent('keydown', { key: 'å', code: 'KeyA', metaKey: mac, ctrlKey: !mac, altKey: true, bubbles: true, cancelable: true });
+    input.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+    expect(setActiveMode).toHaveBeenCalledWith('calendar');
+  });
+
+  it('leaves Select All and AI Chat bindings alone and rejects extra Shift', () => {
+    render(<Harness activeMode="files" />);
+    pressAppModifier('a', { code: 'KeyA' });
+    pressAppModifier('A', { shiftKey: true, code: 'KeyA' });
+    pressAppModifier('A', { shiftKey: true, altKey: true, code: 'KeyA' });
+    expect(setActiveMode).not.toHaveBeenCalled();
+  });
+
+  it('does not navigate a window with no workspace', () => {
+    render(<Harness activeMode="files" workspaceMode={false} />);
+    pressAppModifier('a', { altKey: true, code: 'KeyA' });
+    expect(setActiveMode).not.toHaveBeenCalled();
+  });
+});
+
+describe('Cmd+Alt+P', () => {
+  it.each<ContentMode>(['files', 'agent', 'settings', 'tracker', 'collab'])('opens the Planner from %s, including the macOS Option character', (activeMode) => {
+    render(<Harness activeMode={activeMode} />);
+    pressAppModifier('π', { altKey: true, code: 'KeyP' });
+    expect(setActiveMode).toHaveBeenCalledWith('tracker');
+    expect(store.get(trackerModeLayoutAtom).plannerOpen).toBe(true);
+  });
+
+  it('leaves focused ticket details and stays open on repeated presses', () => {
+    store.set(setTrackerModeLayoutAtom, { selectedItemId: 'ticket', itemViews: { ticket: 'document' } });
+    render(<Harness activeMode="tracker" />);
+    pressAppModifier('p', { altKey: true, code: 'KeyP' });
+    pressAppModifier('p', { altKey: true, code: 'KeyP' });
+    expect(store.get(trackerModeLayoutAtom).plannerOpen).toBe(true);
+    expect(store.get(trackerModeDocumentItemIdAtom)).toBeNull();
+    expect(store.get(trackerModeLayoutAtom).itemViews.ticket).toBe('document');
+    expect(toggleActiveLeftPane).not.toHaveBeenCalled();
+  });
+
+  it('surfaces the Planner from behind a fullscreen panel', () => {
+    render(<Harness activeMode="files" isFullscreenPanelActive />);
+    pressAppModifier('p', { altKey: true, code: 'KeyP' });
+    expect(exitFullscreenPanel).toHaveBeenCalledOnce();
+    expect(store.get(trackerModeLayoutAtom).plannerOpen).toBe(true);
+  });
+
+  it('responds to the native menu command once without replaying it on mode changes', () => {
+    const { rerender } = render(<Provider store={store}><Harness activeMode="files" /></Provider>);
+    act(() => store.set(trackerPlannerRequestAtom, version => version + 1));
+    expect(store.get(trackerModeLayoutAtom).plannerOpen).toBe(true);
+    expect(setActiveMode).toHaveBeenCalledTimes(1);
+    rerender(<Provider store={store}><Harness activeMode="tracker" /></Provider>);
+    expect(setActiveMode).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not take Cmd+P or Cmd+Shift+P, or open without a workspace', () => {
+    render(<Harness activeMode="files" />);
+    pressAppModifier('p', { code: 'KeyP' });
+    pressAppModifier('P', { shiftKey: true, code: 'KeyP' });
+    pressAppModifier('P', { shiftKey: true, altKey: true, code: 'KeyP' });
+    store.set(activeWorkspacePathAtom, null);
+    pressAppModifier('p', { altKey: true, code: 'KeyP' });
+    expect(setActiveMode).not.toHaveBeenCalled();
+    expect(store.get(trackerModeLayoutAtom).plannerOpen).toBe(false);
+  });
 });
 
 describe('Cmd+T', () => {

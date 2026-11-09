@@ -8,6 +8,8 @@ import {
   createTrackerWorktreeSession,
   deriveTrackerWorktreeName,
   isTrackerLaunchForWorkspace,
+  prepareTrackerLaunchContext,
+  createTrackerSession,
 } from '../trackerSessionLaunch';
 
 function makeTrackerRecord(overrides: Partial<TrackerRecord> = {}): TrackerRecord {
@@ -49,7 +51,7 @@ describe('buildTrackerLaunchContext', () => {
         '',
         'Update this tracker item\'s status when done using tracker_update with id "NIM-1624".',
       ].join('\n'),
-      worktreeName: 'nim-1624-launch-a-worktree-from-a-tracker',
+      worktreeName: 'launch-a-worktree-from-a-tracker-feature_1624',
     });
   });
 
@@ -77,7 +79,7 @@ describe('buildTrackerLaunchContext', () => {
     expect(context.trackerLinkId).toBe('file:nimbalyst-local/plans/branching.md');
     expect(context.draftInput).toContain('implement tracker item plan-branching: Branching Plan');
     expect(context.draftInput).toContain('Source: @nimbalyst-local/plans/branching.md');
-    expect(context.worktreeName).toBe('plan-branching-branching-plan');
+    expect(context.worktreeName).toBe('branching-plan-plan-branching');
   });
 });
 
@@ -109,6 +111,16 @@ describe('isTrackerLaunchForWorkspace', () => {
 });
 
 describe('createTrackerWorktreeSession', () => {
+  it('rechecks the workspace after asynchronous Jira preparation', async () => {
+    const pending = buildTrackerLaunchContext('feature_1624', makeTrackerRecord());
+    const createSession = vi.fn();
+    let workspace = '/repo';
+    await expect(createTrackerWorktreeSession(pending, '/repo', { baseBranch: 'main' }, createSession, async () => {
+      workspace = '/different';
+      return { ...pending, draftInput: 'full context' };
+    }, () => workspace)).rejects.toThrow('project changed');
+    expect(createSession).not.toHaveBeenCalled();
+  });
   it('refuses a pending launch after the active project changes without creating a session', async () => {
     const pending = buildTrackerLaunchContext('feature_1624', makeTrackerRecord());
     const createSession = vi.fn(async () => 'session');
@@ -128,15 +140,94 @@ describe('createTrackerWorktreeSession', () => {
   });
 });
 
+describe('Jira context in both launch modes', () => {
+  const jira = () => makeTrackerRecord({ system: { ...makeTrackerRecord().system, origin: { kind: 'external', external: { providerId: 'jira', externalId: 'APP-1', urn: 'jira://team.atlassian.net/APP-1', url: 'https://team.atlassian.net/browse/APP-1', titleSnapshot: 'APP-1', importedAt: 'then', lastSyncedAt: 'then' } } } });
+  it('uses canonical main-process evidence instead of the preview for Launch Session', async () => {
+    const invoke = vi.fn(async () => ({ draftInput: 'Full description, criteria, comments and clarification instructions' }));
+    const context = await prepareTrackerLaunchContext('feature_1624', jira(), invoke);
+    expect(invoke).toHaveBeenCalledWith('jira:prepare-launch', { workspacePath: '/repo', itemId: 'feature_1624' });
+    expect(context.draftInput).toBe('Full description, criteria, comments and clarification instructions');
+    expect(context.trackerLinkId).toBe('feature_1624');
+    expect(context.workspacePath).toBe('/repo');
+  });
+  it('submits the same prepared context with the selected base branch in Launch Worktree', async () => {
+    const item = jira();
+    const base = buildTrackerLaunchContext(item.id, item);
+    const create = vi.fn(async () => 'new-session');
+    await createTrackerWorktreeSession(base, '/repo', { baseBranch: 'release', name: 'ticket' }, create,
+      () => prepareTrackerLaunchContext(item.id, item, async () => ({ draftInput: 'Full context' })), () => '/repo');
+    expect(create).toHaveBeenCalledWith({ baseBranch: 'release', name: 'ticket', initialDraft: 'Full context' });
+  });
+  it('does not create a worktree when Jira context preparation fails', async () => {
+    const item = jira();
+    const create = vi.fn();
+    await expect(createTrackerWorktreeSession(buildTrackerLaunchContext(item.id, item), '/repo', { baseBranch: 'main' }, create,
+      () => prepareTrackerLaunchContext(item.id, item, async () => { throw new Error('not available'); }), () => '/repo')).rejects.toThrow('not available');
+    expect(create).not.toHaveBeenCalled();
+  });
+  it('preserves the existing non-Jira launch draft without calling Jira', async () => {
+    const invoke = vi.fn();
+    const context = await prepareTrackerLaunchContext('feature_1624', makeTrackerRecord(), invoke);
+    expect(context).toEqual(buildTrackerLaunchContext('feature_1624', makeTrackerRecord()));
+    expect(invoke).not.toHaveBeenCalled();
+  });
+  it.each(['claude-code:sonnet', 'openai-codex:gpt-6-astra'])('retains %s, the workspace and durable tracker link without submitting execution', async model => {
+    const item = jira();
+    const context = await prepareTrackerLaunchContext(item.id, item, async () => ({ draftInput: 'Full Jira evidence' }));
+    const invoke = vi.fn(async () => ({ success: true, id: 'new-session' }));
+    expect(await createTrackerSession(context, model, () => '/repo', invoke)).toBe('new-session');
+    expect(invoke.mock.calls).toEqual([
+      ['sessions:create', { session: { id: expect.any(String), provider: model.split(':')[0], model, title: 'New Session' }, workspaceId: '/repo' }],
+      ['tracker:link-session', { trackerId: item.id, sessionId: 'new-session' }],
+      ['ai:saveDraftInput', 'new-session', 'Full Jira evidence', '/repo'],
+    ]);
+  });
+  it('creates and links the tracker session in the supplied worktree', async () => {
+    const item = jira();
+    const context = await prepareTrackerLaunchContext(item.id, item, async () => ({ draftInput: 'Full context' }));
+    const invoke = vi.fn(async () => ({ success: true, id: 'new-session' }));
+
+    await expect(createTrackerSession(context, undefined, () => '/repo', invoke, 'wt-1')).resolves.toBe('new-session');
+    expect(invoke).toHaveBeenCalledWith('sessions:create', {
+      workspaceId: '/repo',
+      session: expect.objectContaining({ worktreeId: 'wt-1' }),
+    });
+    expect(invoke).toHaveBeenCalledWith('tracker:link-session', { trackerId: item.id, sessionId: 'new-session' });
+  });
+  it('cannot create a normal session after a project switch during context preparation', async () => {
+    const context = await prepareTrackerLaunchContext('feature_1624', jira(), async () => ({ draftInput: 'Full context' }));
+    const invoke = vi.fn();
+    await expect(createTrackerSession(context, 'openai-codex:gpt-6-astra', () => '/other', invoke)).rejects.toThrow('project changed');
+    expect(invoke).not.toHaveBeenCalled();
+  });
+});
+
 describe('deriveTrackerWorktreeName', () => {
+  it('defaults to the lowercase ticket title followed by its stable tracker id', () => {
+    expect(deriveTrackerWorktreeName('tsk_mvv2bro7k9rwsi', 'Jira to Dev Account'))
+      .toBe('jira-to-dev-account-tsk_mvv2bro7k9rwsi');
+  });
+
+  it('uses the id alone when the title has no usable characters or matches the id', () => {
+    expect(deriveTrackerWorktreeName('NIM-1624', '?!')).toBe('nim-1624');
+    expect(deriveTrackerWorktreeName('NIM-1624', 'NIM-1624')).toBe('nim-1624');
+  });
+
   it('produces a bounded branch-safe slug', () => {
     const name = deriveTrackerWorktreeName(
       'NIM-1624',
       'Launch worktree: preserve SAME tracker context?! with a deliberately long title',
     );
 
-    expect(name).toMatch(/^nim-1624-[a-z0-9-]+$/);
+    expect(name).toMatch(/^[a-z0-9-]+-nim-1624$/);
     expect(name.length).toBeLessThanOrEqual(64);
     expect(name).not.toMatch(/-$/);
+  });
+
+  it('reserves room for the complete tracker id when shortening a long title', () => {
+    const id = 'tsk_mvv2bro7k9rwsi';
+    const name = deriveTrackerWorktreeName(id, 'Long ticket title '.repeat(20));
+    expect(name).toHaveLength(64);
+    expect(name).toMatch(/^[a-z0-9-]+-tsk_mvv2bro7k9rwsi$/);
   });
 });

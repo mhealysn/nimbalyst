@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { useAtomValue, useSetAtom } from 'jotai';
 import type { ContentMode } from '../types/WindowModeTypes';
 import {
@@ -17,7 +17,8 @@ import {
 } from '../store/atoms/openProjects';
 import { prRemoteAtom } from '../store/atoms/pullRequests';
 import { developerModeAtom } from '../store/atoms/appSettings';
-import { sessionLaunchPopupRequestAtom, trackerQuickCreateRequestAtom } from '../store/atoms/appCommands';
+import { sessionLaunchPopupRequestAtom, trackerQuickCreateRequestAtom, trackerPlannerRequestAtom } from '../store/atoms/appCommands';
+import { openTrackerPlannerAtom } from '../store/atoms/trackers';
 import { titleBarCreateMenusAtom, type TitleBarCreateMenuItem } from '../store/atoms/titleBarCreate';
 import posthog from 'posthog-js';
 
@@ -69,6 +70,8 @@ interface KeyboardShortcutsOptions {
  * - Cmd+K: Switch to Agent mode (or toggle session history if already in Agent mode)
  * - Cmd+Y: Open history dialog (Files mode only)
  * - Cmd+T: Switch to Tracker mode (or toggle its sidebar if already in Tracker mode)
+ * - Cmd+Alt+P: Open the Tracker Planner from any workspace mode
+ * - Cmd+Alt+A: Open the Agenda from any workspace mode
  * - Cmd+Alt+M: Switch to Org mode (or toggle its sidebar if already in Org mode)
  * - Cmd+Alt+W: Open the new-worktree dialog
  * - Ctrl+`: Toggle Terminal panel
@@ -158,6 +161,20 @@ export function useKeyboardShortcuts({
   const toggleTerminalPanel = useSetAtom(toggleTerminalPanelAtom);
   const closeTerminalPanel = useSetAtom(closeTerminalPanelAtom);
   const developerMode = useAtomValue(developerModeAtom);
+  const plannerRequest = useAtomValue(trackerPlannerRequestAtom);
+  const handledPlannerRequest = useRef(plannerRequest);
+  const openPlanner = useCallback(() => {
+    if (!workspaceMode || !store.get(activeWorkspacePathAtom)) return;
+    store.set(openTrackerPlannerAtom);
+    if (isFullscreenPanelActive) exitFullscreenPanel();
+    setActiveMode('tracker');
+  }, [workspaceMode, isFullscreenPanelActive, exitFullscreenPanel, setActiveMode]);
+
+  useEffect(() => {
+    if (handledPlannerRequest.current === plannerRequest) return;
+    handledPlannerRequest.current = plannerRequest;
+    openPlanner();
+  }, [plannerRequest, openPlanner]);
 
   // Cmd+Alt+W pressed outside agent mode: open the new-worktree dialog once
   // agent mode has published its create menu.
@@ -180,6 +197,25 @@ export function useKeyboardShortcuts({
     const handleKeyDown = (e: KeyboardEvent): void => {
       // On macOS, app shortcuts use Command (metaKey). On Windows/Linux, they use Ctrl.
       const isAppModifier = isMac ? e.metaKey : e.ctrlKey;
+
+      // Option+A produces å on macOS; use the physical key to keep it reachable.
+      if (workspaceMode && isAppModifier && e.altKey && !e.shiftKey
+        && (e.code === 'KeyA' || e.key.toLowerCase() === 'a')) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (isFullscreenPanelActive) exitFullscreenPanel();
+        setActiveMode('calendar');
+        return;
+      }
+
+      // Option+P produces π on macOS; match the physical key as well.
+      if (workspaceMode && isAppModifier && e.altKey && !e.shiftKey
+        && (e.code === 'KeyP' || e.key.toLowerCase() === 'p')) {
+        e.preventDefault();
+        e.stopPropagation();
+        openPlanner();
+        return;
+      }
 
       // Cmd/Ctrl+Shift+N opens (or toggles) the new-session composer without
       // changing the active content mode. Electron's menu accelerator owns the
@@ -439,5 +475,6 @@ export function useKeyboardShortcuts({
     isFullscreenPanelActive,
     exitFullscreenPanel,
     orgModeAvailable,
+    openPlanner,
   ]);
 }

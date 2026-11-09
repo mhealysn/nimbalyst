@@ -1,6 +1,22 @@
 # Tracker Workflows
 
-This doc covers tracker-item workflows for decisions and bugs.
+This doc covers tracker-item workflows for tasks, decisions, and bugs.
+
+## Tasks and subtasks
+
+A subtask is an ordinary Task with a single `parentTask` relationship to another Task. The parent has the inverse `subtasks` list. Both fields use the existing synced relationship storage; setting or clearing either side maintains the other. Changing a subtask's parent removes it from the former parent's list. Each task keeps its own workflow status, assignee, and optional session links; finishing a child does not finish the parent.
+
+Agents should create subtasks automatically when a task has distinct pieces worth tracking independently, after reading the parent and reusing existing subtasks. Small implementation steps can stay in the original task. Create a child with `tracker_create({ type: "task", title: "Implement search indexing", fields: { parentTask: { itemId: "<parent stable item id>", title: "Search", trackerType: "task" } } })`. A customized workspace schema may use different fields; inspect `tracker_list_types` first. Link an authorized delegated session to its subtask with `tracker_link_session`; a subtask does not require a sub-agent.
+
+If creation returns a `relationshipWrite` warning, the item and its own relationship fields are already saved. Keep its returned ID, inspect the related items, and repair their inverse fields rather than creating a duplicate subtask.
+
+In the Tasks or All tracker kanban, open the field filter, select **Parent Task**, and choose the parent. This shows its direct subtasks and uses the same persisted filter as the list and saved views. The advanced filter's **is empty** operator shows top-level tasks. The parent and subtasks relationship fields in task details let people inspect, attach, detach, or move existing tasks.
+
+## Git delivery and task completion
+
+Local commits link to Task items but leave their workflow status open, including commits with closing keywords. A confirmed PR merge completes a task linked explicitly to that PR, or linked through a session whose clean worktree HEAD matches the merged PR head. Tasks referencing several PRs wait until every reference is confirmed merged. Background PR polling also handles merges performed outside Nimbalyst. Cancelled and already completed tasks keep their status.
+
+The Sessions board derives Done from merged PR evidence; archiving, setting the session phase to complete, or dragging an unmerged card into Done does not complete it. Its Git status column shows Ready for commit, Ready for push, and Ready for PR from live Git state. Push readiness uses the branch's tracked upstream rather than its base branch.
 
 ## Recording Decisions
 
@@ -40,7 +56,7 @@ When fixing a bug, **always ensure a tracker bug item exists** before starting t
 2. **Create if missing**: If no tracker item exists, create one before writing any fix code
 3. **Keep it updated**: Update the tracker item's status as you progress (`to-do` → `in-progress` → `in-review`)
 4. **Link the session**: Always call `tracker_link_session` so the bug and session are cross-referenced
-5. **Close it on the commit**: When the user commits the fix, put a closing reference on its own line in the commit message — `Fixes NIM-123`, using the item's issue key. That commit is the user's sign-off, and `CommitTrackerLinker` moves the item to `done` and marks the session `complete`. A bare `NIM-123` only links the commit; it does not close.
+5. **Close it on the commit**: When the user commits the fix, put a closing reference on its own line in the commit message — `Fixes NIM-123`, using the item's issue key. That commit is the user's sign-off, and `CommitTrackerLinker` moves the bug item to `done`. The Sessions board still waits for the PR to merge before showing Done. A bare `NIM-123` only links the commit; it does not close.
 
 Do not stop at step 3. An item left in `in-review` after its fix shipped is a false backlog entry — the user has to clear it by hand. If the item has no issue key, say so when you propose the commit rather than silently omitting the reference.
 

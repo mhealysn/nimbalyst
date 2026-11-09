@@ -1,4 +1,5 @@
 import type { AgentRole, SessionData, SessionMode, SessionType, TranscriptViewMessage } from '../server/types';
+import type { SessionCompletionMetrics } from '../sessionCompletionMetrics';
 import type { SessionContextUsage } from '../sessionContextUsage';
 
 // Type aliases for compatibility
@@ -35,6 +36,8 @@ export interface SessionMeta {
   createdAt: number;
   updatedAt: number;
   messageCount: number;
+  /** Lightweight transcript-existence signal; list queries do not count messages. */
+  hasStarted?: boolean;
   isArchived: boolean;
   isPinned: boolean;
   hasUnread?: boolean;
@@ -48,11 +51,15 @@ export interface SessionMeta {
   hasPendingInteractivePrompt?: boolean;
   // Kanban board phase and tags (from metadata JSONB)
   phase?: string;
+  /** User board placement, valid only while the observed operational status matches. */
+  kanbanOverride?: { column: 'backlog' | 'blocked' | 'implementing' | 'awaiting-input' | 'git' | 'validating' | 'complete'; status: string };
   tags?: string[];
   // Linked tracker item IDs (from metadata JSONB)
   linkedTrackerItemIds?: string[];
   /** Last persisted context-window fill (metadata.tokenUsage.currentContext). */
   contextUsage?: SessionContextUsage;
+  /** Lifetime spend and transcript time bounds; independent of metadata edit timestamps. */
+  completionMetrics?: SessionCompletionMetrics;
   // Branch tracking - SEPARATE from hierarchical parentSessionId
   branchedFromSessionId?: string;
   branchPointMessageId?: number;
@@ -75,7 +82,7 @@ export interface CreateSessionPayload {
   filePath?: string;
   worktreeId?: string;  // ID of the associated worktree
   worktreePath?: string;  // Path to the worktree directory
-  worktreeProjectPath?: string;  // Path to the parent project (for permission lookups)
+  worktreeProjectPath?: string;  // Worktree's source project; workspaceId owns session permissions
   parentSessionId?: string | null;  // Parent session ID for hierarchical workstreams
   providerConfig?: Record<string, unknown>;
   providerSessionId?: string;

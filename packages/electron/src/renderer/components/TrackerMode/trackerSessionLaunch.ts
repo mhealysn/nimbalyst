@@ -1,4 +1,5 @@
 import type { TrackerRecord } from '@nimbalyst/runtime/core/TrackerRecord';
+import { ModelIdentifier } from '@nimbalyst/runtime/ai/server/types';
 import {
   getRecordFieldStr,
   getRecordPriority,
@@ -13,6 +14,28 @@ export interface TrackerLaunchContext {
   trackerLinkId: string;
   draftInput: string;
   worktreeName: string;
+}
+
+/** Keep provider selection, durable linking and draft submission in the existing IPC flow. */
+export async function createTrackerSession(
+  context: TrackerLaunchContext,
+  model: string | undefined,
+  getActiveWorkspace: () => string | null | undefined,
+  invoke: (channel: string, ...args: any[]) => Promise<any>,
+  worktreeId?: string,
+): Promise<string> {
+  if (!context.workspacePath || getActiveWorkspace() !== context.workspacePath) {
+    throw new Error('The active project changed. Start the session from the original project.');
+  }
+  const provider = (model ? ModelIdentifier.tryParse(model)?.provider : undefined) || 'claude-code';
+  const result = await invoke('sessions:create', {
+    session: { id: crypto.randomUUID(), provider, model, title: 'New Session', ...(worktreeId ? { worktreeId } : {}) },
+    workspaceId: context.workspacePath,
+  });
+  if (!result?.success || !result.id) throw new Error(result?.error || 'Session was not created.');
+  await invoke('tracker:link-session', { trackerId: context.trackerLinkId, sessionId: result.id });
+  await invoke('ai:saveDraftInput', result.id, context.draftInput, context.workspacePath);
+  return result.id;
 }
 
 /**
@@ -33,32 +56,52 @@ export async function createTrackerWorktreeSession(
   activeWorkspacePath: string | null,
   options: { baseBranch: string; name?: string },
   createSession: (options: { baseBranch: string; name?: string; initialDraft: string }) => Promise<string | undefined>,
+  prepare?: () => Promise<TrackerLaunchContext>,
+  getActiveWorkspace?: () => string | null | undefined,
 ): Promise<string | undefined> {
   if (!context.workspacePath || context.workspacePath !== activeWorkspacePath) {
     throw new Error('The active project changed. Cancel and start the worktree from the original project.');
   }
+  const prepared = prepare ? await prepare() : context;
+  if (prepared.workspacePath !== context.workspacePath || (getActiveWorkspace && getActiveWorkspace() !== context.workspacePath)) {
+    throw new Error('The active project changed. Cancel and start the worktree from the original project.');
+  }
   // Invoke synchronously after the check so creation captures the same active project.
-  return createSession({ ...options, initialDraft: context.draftInput });
+  return createSession({ ...options, initialDraft: prepared.draftInput });
 }
 
-function slugifyWorktreeName(value: string): string {
+/** Resolve Jira from canonical storage in main, never from the description preview. */
+export async function prepareTrackerLaunchContext(
+  trackerItemId: string,
+  trackerItem: TrackerRecord,
+  invoke: (channel: string, args: { workspacePath: string; itemId: string }) => Promise<{ draftInput: string }>,
+): Promise<TrackerLaunchContext> {
+  const context = buildTrackerLaunchContext(trackerItemId, trackerItem);
+  const origin = trackerItem.system.origin;
+  if (origin?.kind !== 'external' || origin.external.providerId !== 'jira') return context;
+  if (!context.workspacePath) throw new Error('Jira launch requires workspacePath.');
+  const prepared = await invoke('jira:prepare-launch', { workspacePath: context.workspacePath, itemId: trackerItemId });
+  if (!prepared?.draftInput) throw new Error('Jira launch context could not be prepared. Retry the launch.');
+  return { ...context, draftInput: prepared.draftInput };
+}
+
+function slugifyWorktreeName(value: string, preserveUnderscores = false): string {
   return value
     .normalize('NFKD')
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
+    .replace(preserveUnderscores ? /[^a-z0-9_]+/g : /[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
 }
 
 export function deriveTrackerWorktreeName(itemId: string, title: string): string {
-  const itemSlug = slugifyWorktreeName(itemId) || 'tracker-item';
+  const itemSlug = (slugifyWorktreeName(itemId, true) || 'tracker-item').slice(0, MAX_WORKTREE_NAME_LENGTH).replace(/-+$/g, '');
   const titleSlug = slugifyWorktreeName(title);
-  const combined = titleSlug && titleSlug !== itemSlug
-    ? `${itemSlug}-${titleSlug}`
+  // Shorten the title first so the tracker id remains intact at the end.
+  const titleLength = Math.max(0, MAX_WORKTREE_NAME_LENGTH - itemSlug.length - 1);
+  const shortTitle = titleSlug.slice(0, titleLength).replace(/-+$/g, '');
+  return shortTitle && titleSlug !== slugifyWorktreeName(itemId)
+    ? `${shortTitle}-${itemSlug}`
     : itemSlug;
-
-  return combined
-    .slice(0, MAX_WORKTREE_NAME_LENGTH)
-    .replace(/-+$/g, '');
 }
 
 /**
@@ -111,6 +154,6 @@ export function buildTrackerLaunchContext(
       ? `file:${trackerItem.system.documentPath}`
       : trackerItemId,
     draftInput: lines.join('\n'),
-    worktreeName: deriveTrackerWorktreeName(itemId, title),
+    worktreeName: deriveTrackerWorktreeName(trackerItemId, title),
   };
 }

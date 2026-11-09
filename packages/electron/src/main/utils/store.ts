@@ -145,6 +145,7 @@ interface AppStoreSchema {
   completionSoundVolume?: number;
   // OS notifications
   osNotificationsEnabled?: boolean;
+  sessionReviewNotificationsEnabled?: boolean;
   // Release channel
   releaseChannel?: ReleaseChannel;
   // Shared fallback for native file/folder dialogs outside workspace context.
@@ -552,6 +553,10 @@ export type { OnboardingConfig } from '../../shared/types/workspace';
 export type AgentFileScopeMode = 'current-changes' | 'session-files' | 'all-changes';
 
 export interface WorkspaceState {
+  /** Local, restart-safe linked-agent waits; never synced to another device. */
+  trackerDependencyWaits?: import('../services/TrackerDependencyResumeService').DependencyWaits;
+  /** Local daily task reminder preferences and restart-safe delivery ledger. */
+  taskReminders?: import('../services/TaskReminderService').TaskReminderState;
   remoteSessionDrafts?: Record<string, { text: string; options?: import("@nimbalyst/runtime/sync/types").RemoteTurnOptions; attachments: import("@nimbalyst/runtime/ai/server/types").ChatAttachment[] }>;
   /** Explicit Cloudflare choices for this project; authentication stays in Wrangler. */
   cloudflareSandboxSelection?: { profileName: string; accountId: string | null };
@@ -978,6 +983,7 @@ function deepMerge<T extends Record<string, any>>(target: T, source: any): T {
  */
 function createDefaultWorkspaceState(workspacePath: string): WorkspaceState {
   return {
+    trackerDependencyWaits: {},
     workspacePath,
     attachedFolders: [],
     windowState: undefined,
@@ -2001,6 +2007,14 @@ export function isSessionBlockedNotificationsEnabled(): boolean {
 
 export function setSessionBlockedNotificationsEnabled(enabled: boolean): void {
   getAppStore().set('sessionBlockedNotificationsEnabled', enabled);
+}
+
+export function isSessionReviewNotificationsEnabled(): boolean {
+  return getAppStore().get('sessionReviewNotificationsEnabled', true);
+}
+
+export function setSessionReviewNotificationsEnabled(enabled: boolean): void {
+  getAppStore().set('sessionReviewNotificationsEnabled', enabled);
 }
 
 // Release Channel Settings

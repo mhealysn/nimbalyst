@@ -97,7 +97,7 @@ interface NavigationGutterProps {
   onExtensionBottomPanelChange?: (panelId: string | null) => void;
 }
 
-// Shared nav-button styling. `active` swaps the filled/primary look.
+// Shared nav-button styling. Active modes use a quiet accent tint.
 /**
  * Org mode is unfinished, so its gutter button is hidden. The mode itself, its
  * shortcut and the menu item still work. Flip this to bring the button back.
@@ -107,7 +107,7 @@ export const ORG_MODE_GUTTER_BUTTON_ENABLED = false;
 const NAV_BTN_BASE =
   'nav-button group relative w-9 h-9 flex items-center justify-center border-none rounded-md cursor-pointer transition-all duration-150 p-0 active:scale-95 focus-visible:outline-2 focus-visible:outline-[var(--nim-primary)] focus-visible:outline-offset-2';
 const navBtnClass = (active: boolean): string =>
-  `${NAV_BTN_BASE} ${active ? 'active bg-nim-primary text-nim-on-primary hover:bg-nim-primary-hover' : 'bg-transparent text-nim-muted hover:bg-nim-tertiary hover:text-nim'}`;
+  `${NAV_BTN_BASE} ${active ? 'active bg-nim-selected text-nim hover:bg-nim-active' : 'bg-transparent text-nim-muted hover:bg-nim-tertiary hover:text-nim'}`;
 
 export const NavigationGutter: React.FC<NavigationGutterProps> = ({
   contentMode,
@@ -385,6 +385,12 @@ export const NavigationGutter: React.FC<NavigationGutterProps> = ({
         onReclick: () => onToggleTrackerCollapsed?.(),
       }),
     },
+    {
+      id: 'calendar', section: 'modes', icon: 'calendar_month', label: 'Calendar', hideable: true,
+      render: () => renderModeButton({
+        icon: 'calendar_month', label: `Agenda (${getShortcutDisplay(KeyboardShortcuts.view.agendaMode)})`, contentMode: 'calendar', testId: 'calendar-mode-button',
+      }),
+    },
     ...(hasPrRemote ? [{
       id: 'pr-review', section: 'modes' as GutterSection, icon: 'merge', label: 'GitHub', hideable: true,
       render: () => renderModeButton({
@@ -547,14 +553,16 @@ export const NavigationGutter: React.FC<NavigationGutterProps> = ({
     }
   }, [hiddenItems, canHide, toggleHidden]);
 
-  // Render one section: available items, in saved order, minus hidden ones.
+  // Voice owns the global shortcut and audio lifecycle even when its icon is hidden.
+  // Other hidden items can be unmounted normally.
   // Each item is wrapped so a right-click targets it in the context menu.
   const renderSection = (items: GutterItem[], section: GutterSection): React.ReactNode => {
     const ordered = sortBySavedOrder(items, sectionOrder[section]);
-    const visible = ordered.filter((it) => !hiddenItems.includes(it.id));
+    const visible = ordered.filter((it) => it.id === 'voice-mode' || !hiddenItems.includes(it.id));
     return visible.map((it) => (
       <div
         key={it.id}
+        hidden={it.id === 'voice-mode' && hiddenItems.includes(it.id)}
         data-gutter-item={it.id}
         onContextMenu={(e) => openContextMenu(e, it.id)}
       >

@@ -201,7 +201,7 @@ export const HelpContent: Record<string, HelpEntry> = {
 
   'session-kanban-button': {
     title: 'Kanban Board',
-    body: 'Switch to a kanban board view of your sessions organized by phase: Backlog, Planning, Implementing, Validating, and Complete. Drag sessions between columns to update their status.',
+    body: 'Follow sessions in Backlog, Running, Awaiting Input, Review, and Done. Questions and approvals move cards to Awaiting Input. Drag a card to keep it in a column until its live status changes; click it to open the session.',
     shortcut: KeyboardShortcuts.window.kanbanView,
   },
 
@@ -372,6 +372,11 @@ export const HelpContent: Record<string, HelpEntry> = {
     title: 'Trackers',
     body: 'Switch to Tracker mode for a full project management view with table and kanban layouts.',
     shortcut: KeyboardShortcuts.view.trackerMode,
+  },
+  'calendar-mode-button': {
+    title: 'Agenda',
+    body: 'Open your imported Google and Microsoft calendars in a month view, select a day or event, and manage accounts from calendar settings.',
+    shortcut: KeyboardShortcuts.view.agendaMode,
   },
   'collab-mode-button': {
     title: 'Wiki',

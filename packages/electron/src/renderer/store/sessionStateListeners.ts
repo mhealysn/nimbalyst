@@ -30,6 +30,9 @@ import {
   sessionDataReleaseListenersAtom,
   reloadSessionDataAtom,
   sessionListWorkspaceAtom,
+  refreshSessionListAtom,
+  sessionKanbanActiveAtom,
+  trackerSessionMetricsActiveAtom,
   updateSessionStoreAtom,
   selectedWorkstreamAtom,
   sessionUnreadAtom,
@@ -48,6 +51,8 @@ import {
   type PendingPrompt,
 } from './atoms/sessions';
 import { applySessionApprovalSnapshotAtom, clearSessionApprovalsAtom } from './atoms/sessionApproval';
+import { observeSessionKanbanStatus } from './atoms/sessionKanban';
+import { sessionSuccessfulCompletionAtom } from './atoms/sessionCompletionActions';
 import type { SessionApprovalSnapshot } from '../../shared/sessionApproval';
 import { windowFocusedAtom } from './atoms/windowFocus';
 import { workstreamActiveChildAtom, workstreamStateAtom } from './atoms/workstreamState';
@@ -240,6 +245,8 @@ export function initSessionStateListeners(): () => void {
   }
 
   const releaseTranscript = (sessionId: string) => transcriptAccumulator.unload(sessionId);
+  let stopObservingBoardStatus: (() => void) | undefined;
+  let boardObserverDisposed = false;
   store.set(sessionDataReleaseListenersAtom, listeners => new Set([...listeners, releaseTranscript]));
 
   // Debounced trigger for the processing-state reconcile (assigned once the
@@ -326,10 +333,14 @@ export function initSessionStateListeners(): () => void {
     // had to click Cancel to clear it. arcenik86 reported exactly this
     // on extended-thinking sessions where slow turns increase the chance
     // of the race. See #116.
+    const turnBoundaryTimestamp = typeof event.timestamp === 'number' ? event.timestamp : Date.now();
     const isTerminalEvent =
       type === 'session:completed' ||
       type === 'session:error' ||
       type === 'session:interrupted';
+    if (isTerminalEvent || type === 'session:started' || type === 'session:streaming') {
+      store.set(sessionSuccessfulCompletionAtom(sessionId), type === 'session:completed' ? turnBoundaryTimestamp : null);
+    }
     if (isTerminalEvent) {
       store.set(clearSessionApprovalsAtom, sessionId);
       // A session that has stopped is not editing anything, whether it stopped
@@ -366,7 +377,6 @@ export function initSessionStateListeners(): () => void {
     }
 
     const resolvedWorkspacePath = ownedWorkspacePath;
-    const turnBoundaryTimestamp = typeof event.timestamp === 'number' ? event.timestamp : Date.now();
 
     switch (type) {
       // Session is actively running
@@ -449,6 +459,12 @@ export function initSessionStateListeners(): () => void {
           timestamp: turnBoundaryTimestamp,
         });
         bumpParentTurnActivity(sessionId, resolvedWorkspacePath, turnBoundaryTimestamp);
+        // Completion cards need persisted spend and transcript bounds even when
+        // the transcript itself is not resident. Refresh once per settled turn.
+        if (store.get(sessionListWorkspaceAtom) === resolvedWorkspacePath
+          && (store.get(sessionKanbanActiveAtom) || store.get(trackerSessionMetricsActiveAtom))) {
+          void store.set(refreshSessionListAtom);
+        }
 
         // Clear any pending throttle timer for this session - the final reload below
         // will fetch the complete state, so a stale throttled reload is unnecessary
@@ -1101,7 +1117,11 @@ export function initSessionStateListeners(): () => void {
       console.error('[sessionStateListeners] reconcileProcessingState failed:', error);
     }
   };
-  void reconcileProcessingState();
+  // Restore live status before comparing durable drag overrides. The default
+  // false processing atom during startup is not a real running -> idle change.
+  void reconcileProcessingState().then(() => {
+    if (!boardObserverDisposed) stopObservingBoardStatus = observeSessionKanbanStatus(store);
+  });
   processingReconcileInterval = setInterval(() => void reconcileProcessingState(), 15000);
 
   // Debounced trigger wired now that reconcileProcessingState exists; fired from
@@ -1164,6 +1184,7 @@ export function initSessionStateListeners(): () => void {
     // already terminalized in the transcript. See #1549.
     cleanupAskUserQuestionCancelled = window.electronAPI.on('ai:askUserQuestionCancelled', handleAskUserQuestionResolved);
     cleanupSessionCancelled = window.electronAPI.on('ai:sessionCancelled', (data: { sessionId: string }) => {
+      store.set(sessionSuccessfulCompletionAtom(data.sessionId), null);
       store.set(clearSessionApprovalsAtom, data.sessionId);
       handleAskUserQuestionResolved(data);
     });
@@ -1187,6 +1208,8 @@ export function initSessionStateListeners(): () => void {
 
   // Return cleanup function
   return () => {
+    boardObserverDisposed = true;
+    stopObservingBoardStatus?.();
     // Clear all pending throttle timers
     for (const timer of reloadThrottleTimers.values()) {
       clearTimeout(timer);

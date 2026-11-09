@@ -25,6 +25,7 @@ import {
   sessionChildrenAtom,
   sessionLastActivityAtom,
   sessionListWorkspaceAtom,
+  trackerSessionMetricsActiveAtom,
   selectedWorkstreamAtom,
   sessionUnreadAtom,
   type SessionMeta,
@@ -36,6 +37,7 @@ import {
 } from '../atoms/sessionActivity';
 import { scrollToMessageAtom } from '../atoms/agentMode';
 import { sessionApprovalSnapshotAtom, sessionAwaitingApprovalAtom } from '../atoms/sessionApproval';
+import { sessionSuccessfulCompletionAtom } from '../atoms/sessionCompletionActions';
 import { windowFocusedAtom } from '../atoms/windowFocus';
 import { activeWorkspacePathAtom, multiProjectModeAtom, openProjectsAtom } from '../atoms/openProjects';
 import { activeExtensionPanelAtom, activeExtensionBottomPanelAtom } from '../atoms/extensionPanels';
@@ -134,6 +136,7 @@ afterEach(() => {
   resetWindowMode();
   store.set(activeWorkspacePathAtom, null);
   store.set(sessionListWorkspaceAtom, null);
+  store.set(trackerSessionMetricsActiveAtom, false);
   store.set(openProjectsAtom, []);
   store.set(workstreamStatesLoadedAtom, false);
   vi.unstubAllGlobals();
@@ -1006,6 +1009,21 @@ describe('contract: per-message events must not bump turn activity', () => {
   });
 });
 
+it('preserves a running session board override while startup restores processing state', async () => {
+  cleanup?.();
+  const sid = uniqueSessionId('board-startup');
+  seedRegistry([{ id: sid, messageCount: 1 }]);
+  const kanbanOverride = { column: 'validating' as const, status: JSON.stringify([[sid, 'implementing']]) };
+  const registry = new Map(store.get(sessionRegistryAtom));
+  registry.set(sid, { ...registry.get(sid)!, kanbanOverride });
+  store.set(sessionRegistryAtom, registry);
+  window.electronAPI.sessionState.getRunningSessionIds = vi.fn().mockResolvedValue({ success: true, sessionIds: [sid] });
+  const mod = await import('../sessionStateListeners');
+  cleanup = mod.initSessionStateListeners();
+  await vi.waitFor(() => expect(store.get(sessionProcessingAtom(sid))).toBe(true));
+  expect(store.get(sessionRegistryAtom).get(sid)?.kanbanOverride).toEqual(kanbanOverride);
+});
+
 describe('processing reconcile on terminal events', () => {
   it('heals a stuck processing session promptly when any session reaches a terminal state', async () => {
     vi.useFakeTimers();
@@ -1390,3 +1408,29 @@ describe('approval snapshots and multiple prompts', () => {
     expect(store.get(sessionHasPendingInteractivePromptAtom(sid))).toBe(false);
   });
 });
+
+
+it('refreshes archived completion metrics when a visible tracker session settles', async () => {
+  const sessionId = uniqueSessionId('completion-metrics');
+  seedRegistry([{ id: sessionId, workspaceId: WS }]);
+  store.set(sessionListWorkspaceAtom, WS);
+  store.set(trackerSessionMetricsActiveAtom, true);
+  const invoke = window.electronAPI.invoke as ReturnType<typeof vi.fn>;
+  invoke.mockClear();
+  handlers.get('ai-session-state:event')!({ type: 'session:completed', sessionId, workspacePath: WS });
+  await Promise.resolve();
+  expect(invoke).toHaveBeenCalledWith('sessions:list', WS, { includeArchived: true });
+});
+
+it.each(['session:started', 'session:streaming', 'session:error', 'session:interrupted', 'ai:sessionCancelled'])(
+  'clears commit actions on %s and records only successful completion', type => {
+    const sessionId = uniqueSessionId('completion-actions');
+    seedRegistry([{ id: sessionId, workspaceId: WS }]);
+    const lifecycle = handlers.get('ai-session-state:event')!;
+    lifecycle({ type: 'session:completed', sessionId, workspacePath: WS, timestamp: 1234 });
+    expect(store.get(sessionSuccessfulCompletionAtom(sessionId))).toBe(1234);
+    if (type === 'ai:sessionCancelled') handlers.get(type)!({ sessionId });
+    else lifecycle({ type, sessionId, workspacePath: WS });
+    expect(store.get(sessionSuccessfulCompletionAtom(sessionId))).toBeNull();
+  },
+);

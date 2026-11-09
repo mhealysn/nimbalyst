@@ -107,7 +107,7 @@ The renderer resolves both from the main process rather than re-deriving them fr
 
 | Event Name | File(s) | Trigger | Properties | First Added (Public) | Significant Changes |
 | --- | --- | --- | --- | --- | --- |
-| `content_mode_switched` | `NavigationGutter.tsx` | User switches between primary content modes via the navigation gutter | `fromMode` / `toMode` (`files`, `agent`, `tracker`, `collab`, `pr-review`, `settings`) | v0.48.13 (2025-12-17) | (pending release): Documented Tracker, Shared Docs, and PR Review values |
+| `content_mode_switched` | `NavigationGutter.tsx` | User switches between primary content modes via the navigation gutter | `fromMode` / `toMode` (`files`, `agent`, `tracker`, `calendar`, `collab`, `pr-review`, `settings`) | v0.48.13 (2025-12-17) | (pending release): Documented Tracker, Calendar, Shared Docs, and PR Review values |
 | `editor_type_opened` | `TabEditor.tsx:277` | User opens a file in an editor tab | `editorCategory` (markdown/monaco/image or extension name like "Spreadsheet Editor", "PDF Viewer", "Excalidraw Editor", "Data Model Editor")<br/>`fileExtension` (e.g., .md, .csv, .prisma, .mockup.html)<br/>`hasMermaid` (boolean, for markdown)<br/>`hasDataModel` (boolean, for markdown) | v0.48.13 (2025-12-17) | (pending release): Renamed editorType to editorCategory; editorCategory now uses extension displayName for custom editors; fileExtension contains actual extension<br/>(pending release): Defer emit until the editor type settles and re-arm on registry changes, so late-registering extension editors (e.g. .mockup.html, .calc.md) report their compound key/displayName instead of the fallback (.html/.md/monaco) |
 | `markdown_view_mode_switched` | `TabEditor.tsx:1556, 1606` | User switches between rich text (lexical) and raw markdown (monaco) view modes | `fromMode` (lexical/monaco)<br/>`toMode` (lexical/monaco) | v0.48.13 (2025-12-17) |  |
 | `session_view_mode_switched` | `SessionHistory.tsx` | User switches between list and kanban views for session history | `fromMode` (list/card/kanban)<br/>`toMode` (list/card/kanban) | (pending release) |  |
@@ -136,12 +136,12 @@ The three outcomes are instrumented together so the duplicate thresholds can be 
 
 | Event Name | File(s) | Trigger | Properties | First Added (Public) | Significant Changes |
 | --- | --- | --- | --- | --- | --- |
-| `kanban_card_phase_changed` | `SessionKanbanBoard.tsx` | Card moved between phase columns via drag-drop or Cmd+Arrow keyboard shortcut | `method` (drag/keyboard)<br/>`toPhase` (backlog/planning/implementing/validating/complete/unphased)<br/>`cardCount` (number of cards moved)<br/>`cardType` (session/workstream/worktree/mixed) | (pending release) |  |
-| `kanban_card_opened` | `SessionKanbanBoard.tsx` | User opens a session from the kanban board (Enter key or double-click) | `cardType` (session/workstream/worktree) | (pending release) |  |
+| `kanban_card_phase_changed` | `SessionKanbanBoard.tsx` | Card moved between phase columns via drag-drop or Cmd+Arrow keyboard shortcut | `method` (drag/keyboard)<br/>`toPhase` (backlog/implementing/awaiting-input/validating/complete/unphased (reset to automatic))<br/>`cardCount` (number of cards moved)<br/>`cardType` (session/workstream/worktree/mixed) | (pending release) |  |
+| `kanban_card_opened` | `SessionKanbanBoard.tsx` | User opens a session from the kanban board (Enter key or plain click) | `cardType` (session/workstream/worktree) | (pending release) |  |
 | `kanban_card_peeked` | `SessionKanbanBoard.tsx` | User toggles transcript peek on a kanban card (Space key or hover) | `action` (opened/closed) | (pending release) |  |
 | `kanban_card_archived` | `SessionKanbanBoard.tsx` | User archives card(s) from the kanban board via drag to archive gutter or context menu | `cardCount` (number of cards archived)<br/>`cardType` (session/workstream/worktree/mixed) | (pending release) |  |
 | `kanban_filter_applied` | `SessionKanbanBoard.tsx` | User applies a tag filter or searches on the kanban board | `filterType` (tag/search)<br/>`activeTagCount` (number of active tag filters) | (pending release) |  |
-| `kanban_column_collapsed` | `SessionKanbanBoard.tsx` | User collapses or expands a kanban phase column | `action` (collapsed/expanded)<br/>`column` (backlog/planning/implementing/validating/complete) | (pending release) |  |
+| `kanban_column_collapsed` | `SessionKanbanBoard.tsx` | User collapses or expands a kanban phase column | `action` (collapsed/expanded)<br/>`column` (backlog/implementing/awaiting-input/validating/complete) | (pending release) |  |
 
 ### File History
 

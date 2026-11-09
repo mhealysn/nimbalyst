@@ -63,7 +63,11 @@ import { registerClaudeCodeHandlers } from './ipc/ClaudeCodeHandlers';
 import { registerCodexAuthHandlers } from './ipc/CodexAuthHandlers';
 import { initializeClaudeCodeSessionHandlers } from './ipc/ClaudeCodeSessionHandlers';
 import { getExternalSessionService, stopExternalSessionService } from './services/externalSessions/ExternalSessionService';
+import { initializeDesktopSessionSync, stopDesktopSessionSync } from './services/externalSessions/desktopSessionSync';
 import { registerNotificationHandlers } from './ipc/NotificationHandlers';
+import { registerTaskReminderHandlers } from './ipc/TaskReminderHandlers';
+import { startTaskReminders } from './services/taskReminderRuntime';
+import { startTrackerDependencyResumes } from './services/trackerDependencyRuntime';
 import { registerPermissionHandlers } from './ipc/PermissionHandlers';
 import { registerGitStatusHandlers } from './ipc/GitStatusHandlers';
 import { registerGitHandlers } from './ipc/GitHandlers';
@@ -206,7 +210,7 @@ import { notificationService } from './services/NotificationService';
 // SuperLoopProgressService import removed - server disabled (leaking into non-super-loop sessions)
 import { registerMockupHandlers } from './ipc/MockupHandlers';
 import { registerOffscreenEditorHandlers } from './ipc/OffscreenEditorHandlers';
-import { initVoiceModeService } from './services/voice/VoiceModeService';
+import { getActiveVoiceWindow, initVoiceModeService } from './services/voice/VoiceModeService';
 import { initVoiceModeSettingsHandler } from './services/voice/VoiceModeSettingsHandler';
 import { registerWalkthroughHandlers } from './ipc/WalkthroughHandlers';
 import { registerDataModelHandlers } from './ipc/DataModelHandlers';
@@ -221,6 +225,8 @@ import { registerExtensionHandlers, getClaudePluginPaths, initializeExtensionFil
 import { registerExtensionPermissionHandlers } from './ipc/ExtensionPermissionHandlers';
 import { registerTrackerImporterHandlers } from './ipc/TrackerImporterHandlers';
 import { registerJiraHandlers } from './ipc/JiraHandlers';
+import { registerLinearHandlers } from './ipc/LinearHandlers';
+import { registerCalendarImportHandlers } from './ipc/CalendarImportHandlers';
 import { installExtensionAgentBridge } from './extensions/extensionAgentBridge';
 import { getAgentWorkflowService } from './services/AgentWorkflowService';
 import { queueMarketplaceInstallRequest, registerExtensionMarketplaceHandlers, runExtensionAutoUpdate } from './ipc/ExtensionMarketplaceHandlers';
@@ -1742,9 +1748,11 @@ app.whenReady().then(async () => {
     registerCodexAuthHandlers();
     initializeClaudeCodeSessionHandlers();  // Initialize Claude Code session import
     getExternalSessionService().initialize(); // Explicit opt-in only; waits for first usable before watching.
+    initializeDesktopSessionSync();
     registerAnalyticsHandlers();
     registerFeatureUsageHandlers();
     registerNotificationHandlers();
+    registerTaskReminderHandlers();
     registerClaudeUsageHandlers();
     claudeUsageService.initialize();
     registerCodexUsageHandlers();
@@ -2436,10 +2444,9 @@ app.whenReady().then(async () => {
         matchesAllowPattern(pattern, allow),
       );
     };
-    // NOTE: For worktree sessions, AIService pre-resolves the worktree path to the parent
-    // project (worktreeProjectPath) and passes it via documentContext.permissionsPath.
-    // Providers then use permissionsPath for trust checks, ensuring this
-    // checker receives the parent project path, not the worktree path.
+    // AIService passes the session's owning workspace in documentContext.permissionsPath.
+    // Providers check that project's trust even when execution uses a worktree
+    // of a different selected repo. The Git root is not the permission scope.
     const trustChecker = (workspacePath: string) => {
       const mode = permissionService.getPermissionMode(workspacePath);
       return {
@@ -2583,6 +2590,8 @@ app.whenReady().then(async () => {
     registerExtensionPermissionHandlers();
     registerTrackerImporterHandlers();
     registerJiraHandlers();
+    registerLinearHandlers();
+    registerCalendarImportHandlers();
     registerExtensionMarketplaceHandlers();
     registerOffscreenEditorHandlers();
 
@@ -2687,7 +2696,7 @@ app.whenReady().then(async () => {
       return { success: true };
     });
     initVoiceModeService();
-    initVoiceModeSettingsHandler();
+    initVoiceModeSettingsHandler(() => getActiveVoiceWindow() ?? getMostRecentlyFocusedWorkspaceWindow());
     registerWalkthroughHandlers();
 
     // Start MCP SSE server
@@ -3128,6 +3137,9 @@ app.whenReady().then(async () => {
     // Every window launch intends to open has been requested. Nimbalyst comes
     // to the front once, as soon as the last of them has painted.
     finishStartupWindowCreation();
+    // The first reminder check needs the restored workspaces' task services.
+    app.once('will-quit', startTaskReminders());
+    if (aiService) app.once('will-quit', startTrackerDependencyResumes(aiService));
 
     // Community popup fallback for passive users:
     // show on launch 5+ if success-moment trigger (3 tool sessions) has not fired.
@@ -3279,7 +3291,7 @@ const shutdownForRestart = createRestartShutdown({
         if (sessionSaveInterval) clearInterval(sessionSaveInterval);
         sessionSaveInterval = null;
     },
-    stopExternalSessions: stopExternalSessionService,
+    stopExternalSessions: async () => { await Promise.all([stopExternalSessionService(), stopDesktopSessionSync()]); },
     saveSessionState,
     flushPendingBackups: flushPendingCollabBackups,
     quit: () => {
@@ -3312,6 +3324,7 @@ app.on('before-quit', async (event) => {
     // If auto-updater is updating, don't prevent quit
     if (AutoUpdaterService.isUpdatingApp()) {
         void stopExternalSessionService(); // Revoke immediately, including the updater's early-exit path.
+        void stopDesktopSessionSync();
         console.log('[QUIT] Auto-updater is updating, allowing quit');
         return;
     }
@@ -3384,6 +3397,7 @@ app.on('before-quit', async (event) => {
 
     // Revoke source readers and drain their commits before database shutdown.
     await stopExternalSessionService();
+    await stopDesktopSessionSync();
 
     // Live collaboration backups are debounced. Flush the latest decrypted
     // snapshots before renderer teardown so a quick quit cannot drop them.
